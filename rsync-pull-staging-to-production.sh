@@ -60,6 +60,7 @@ enable_automatic_retry=true
 max_retries=3
 
 # Set to false if you do not want to keep the wp-content/uploads folder during cleanup
+# Typically set to true for very large websites with a large media library.
 keep_uploads_folder=false
 
 # Set to true if you want to use an alternate domain name for the search and replace query
@@ -307,7 +308,7 @@ else
     echo "[+] SUCCESS: Site URL in the database matches the expected URL ($expected_url)." 2>&1 | tee -a ${LogFile}
 fi
 
-# Enable: Discourage search engines from indexing this website
+# Disable: Discourage search engines from indexing this website
 echo "[+] NOTICE: Enabling 'Discourage search engines from indexing this website'." 2>&1 | tee -a ${LogFile}
 mysql --defaults-extra-file=${scriptPath}/.my.cnf -D ${databaseName} -e "
 UPDATE ${table_Prefix}options SET option_value = '1' WHERE option_name = 'blog_public';

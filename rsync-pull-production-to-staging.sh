@@ -60,6 +60,7 @@ enable_automatic_retry=true
 max_retries=3
 
 # Set to false if you do not want to keep the wp-content/uploads folder during cleanup
+# Typically set to true for very large websites with a large media library.
 keep_uploads_folder=false
 
 # Set to true if you want to use an alternate domain name for the search and replace query

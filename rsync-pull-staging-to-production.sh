@@ -7,7 +7,7 @@
 # Author:             WP Speed Expert
 # Author URI:         https://wpspeedexpert.com
 # Version:            3.9.0
-# GitHub:             https://github.com/WPSpeedExpert/rsync-pull/
+# GitHub:             https://github.com/WPSpeedExpert/rsync-pull-wp/
 # To Make Executable: chmod +x rsync-pull-staging-to-production.sh
 # Crontab Schedule:   0 0 * * * /home/epicdeals/rsync-pull-staging-to-production.sh 2>&1
 # =========================================================================== #

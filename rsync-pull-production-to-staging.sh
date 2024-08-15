@@ -6,7 +6,7 @@
 # Requirements:       Cloudpanel, ssh-keygen, pv (Pipe Viewer)
 # Author:             WP Speed Expert
 # Author URI:         https://wpspeedexpert.com
-# Version:            3.9.1
+# Version:            3.9.2
 # GitHub:             https://github.com/WPSpeedExpert/rsync-pull-wp/
 # To Make Executable: chmod +x rsync-pull-production-to-staging.sh
 # Crontab Schedule:   0 0 * * * /home/epicdeals/rsync-pull-production-to-staging.sh 2>&1
@@ -38,12 +38,17 @@ staging_websitePath="/home/${staging_siteUser}/htdocs/${staging_domainName}"
 staging_scriptPath="/home/${staging_siteUser}"
 staging_databaseUserPassword=$(sed -n 's/^password\s*=\s*"\(.*\)".*/\1/p' "${staging_scriptPath}/.my.cnf")
 
-LogFile="${staging_scriptPath}/rsync-pull-production-to-staging.log"
+LogFile="${scriptPath}/rsync-pull-production-to-staging.log"
+
+# Database import method control:
+import_methods=("clpctl" "gunzip" "default" "pv_gunzip")
+
+# MySQL and Server Restart Options
+# Option to control how MySQL is handled and whether to reboot the server.
+# Options: "restart" (restarts MySQL service), "stop_start" (stops and starts MySQL service), "reboot" (performs a graceful shutdown and reboot of the server), "none" (do nothing).
+mysql_restart_method="stop_start"
 
 # Import method control:
-import_methods=("clpctl" "pv_gunzip" "default")
-
-# Use PV (Pipe Viewer) for monitoring progress manually during import (set to true or false).
 use_pv=true
 
 # Install PV if not installed (set to true or false).
@@ -67,7 +72,7 @@ keep_uploads_folder=false
 use_alternate_domain=false
 
 # Alternate domain name (only used if use_alternate_domain is true)
-alternate_domainName="staging.${staging_domainName}"
+alternate_domainName="staging.${domainName}"
 
 # Empty the log file if it exists
 if [ -f ${LogFile} ]; then
@@ -141,26 +146,26 @@ fi 2>&1 | tee -a ${LogFile}
 
 # Export the remote MySQL database
 if [ "$use_remote_server" = true ]; then
-    echo "[+] NOTICE: Exporting the remote database: ${databaseName}" 2>&1 | tee -a ${LogFile}
-    ssh ${remote_server_ssh} "clpctl db:export --databaseName=${databaseName} --file=${scriptPath}/tmp/${databaseName}.sql.gz" 2>&1 | tee -a ${LogFile}
+    echo "[+] NOTICE: Exporting the staging database: ${staging_databaseName}" 2>&1 | tee -a ${LogFile}
+    ssh ${remote_server_ssh} "clpctl db:export --databaseName=${staging_databaseName} --file=${staging_scriptPath}/tmp/${staging_databaseName}.sql.gz" 2>&1 | tee -a ${LogFile}
 
     # Sync the database
-    echo "[+] NOTICE: Syncing the database: ${databaseName}.sql.gz" 2>&1 | tee -a ${LogFile}
-    rsync -azP ${remote_server_ssh}:${scriptPath}/tmp/${databaseName}.sql.gz ${staging_scriptPath}/tmp 2>&1 | tee -a ${LogFile}
+    echo "[+] NOTICE: Syncing the database: ${staging_databaseName}.sql.gz" 2>&1 | tee -a ${LogFile}
+    rsync -azP ${remote_server_ssh}:${staging_scriptPath}/tmp/${staging_databaseName}.sql.gz ${scriptPath}/tmp 2>&1 | tee -a ${LogFile}
 
     # Clean up the remote database export file
-    echo "[+] NOTICE: Cleaning up the remote database export file: ${databaseName}" 2>&1 | tee -a ${LogFile}
-    ssh ${remote_server_ssh} "rm ${scriptPath}/tmp/${databaseName}.sql.gz" 2>&1 | tee -a ${LogFile}
+    echo "[+] NOTICE: Cleaning up the remote database export file: ${staging_databaseName}" 2>&1 | tee -a ${LogFile}
+    ssh ${remote_server_ssh} "rm ${staging_scriptPath}/tmp/${staging_databaseName}.sql.gz" 2>&1 | tee -a ${LogFile}
 else
-    echo "[+] NOTICE: Exporting the local database: ${databaseName}" 2>&1 | tee -a ${LogFile}
-    clpctl db:export --databaseName=${databaseName} --file=${scriptPath}/tmp/${databaseName}.sql.gz 2>&1 | tee -a ${LogFile}
+    echo "[+] NOTICE: Exporting the local staging database: ${staging_databaseName}" 2>&1 | tee -a ${LogFile}
+    clpctl db:export --databaseName=${staging_databaseName} --file=${staging_scriptPath}/tmp/${staging_databaseName}.sql.gz 2>&1 | tee -a ${LogFile}
 fi
 
 # Check for and delete older database backups
-backup_file="/tmp/${staging_databaseName}-backup-$(date +%F).sql.gz"
-if ls /tmp/${staging_databaseName}-backup-*.sql.gz 1> /dev/null 2>&1; then
+backup_file="/tmp/${databaseName}-backup-$(date +%F).sql.gz"
+if ls /tmp/${databaseName}-backup-*.sql.gz 1> /dev/null 2>&1; then
     echo "[+] NOTICE: Deleting older backup files in /tmp/" 2>&1 | tee -a ${LogFile}
-    rm /tmp/${staging_databaseName}-backup-*.sql.gz
+    rm /tmp/${databaseName}-backup-*.sql.gz
     if [ $? -ne 0 ]; then
         echo "[+] ERROR: Failed to delete the older backup files." 2>&1 | tee -a ${LogFile}
     fi
@@ -195,10 +200,10 @@ if [ "$recreate_database" = true ]; then
     fi
 else
     echo "[+] NOTICE: Dropping all database tables ..." 2>&1 | tee -a ${LogFile}
-    tables=$(mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf -Nse 'SHOW TABLES' ${staging_databaseName})
+    tables=$(mysql --defaults-extra-file=${scriptPath}/.my.cnf -Nse 'SHOW TABLES' ${staging_databaseName})
     for table in $tables; do
         echo "[+] NOTICE: Dropping $table from ${staging_databaseName}." 2>&1 | tee -a ${LogFile}
-        mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf  -e "DROP TABLE $table" ${staging_databaseName}
+        mysql --defaults-extra-file=${scriptPath}/.my.cnf  -e "DROP TABLE $table" ${staging_databaseName}
         if [ $? -ne 0 ]; then
             echo "[+] ERROR: Failed to drop table $table. Aborting!" 2>&1 | tee -a ${LogFile}
             exit 1
@@ -215,6 +220,8 @@ import_database() {
 
     if [ "$method" = "clpctl" ]; then
         clpctl db:import --databaseName=${staging_databaseName} --file=${staging_scriptPath}/tmp/${databaseName}.sql.gz 2>&1 | tee -a ${LogFile}
+    elif [ "$method" = "gunzip" ]; then
+        gunzip -c ${staging_scriptPath}/tmp/${databaseName}.sql.gz | mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf ${staging_databaseName} 2>&1 | tee -a ${LogFile}
     elif [ "$method" = "pv_gunzip" ] && [ "$use_pv" = true ]; then
         pv ${staging_scriptPath}/tmp/${databaseName}.sql.gz | gunzip | mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf ${staging_databaseName} 2>&1 | tee -a ${LogFile}
     else
@@ -232,7 +239,7 @@ import_database() {
     fi
 
     expected_url="https://${domainName}"
-    query=$(mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf -D ${staging_databaseName} -se "SELECT option_value FROM ${table_Prefix}options WHERE option_name = 'siteurl';")
+    query=$(mysql --defaults-extra-file=${scriptPath}/.my.cnf -D ${staging_databaseName} -se "SELECT option_value FROM ${table_Prefix}options WHERE option_name = 'siteurl';")
 
     if [ "$query" != "$expected_url" ]; then
         echo "[+] ERROR: The site URL in the database ($query) does not match the expected URL ($expected_url). The database import may have failed." 2>&1 | tee -a ${LogFile}
@@ -298,20 +305,20 @@ if [ $? -ne 0 ]; then
 fi
 
 # Verify if the site URL is correctly set in the database after search and replace
-expected_staging_url="https://${final_staging_domainName}"
-query=$(mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf -D ${staging_databaseName} -se "SELECT option_value FROM ${table_Prefix}options WHERE option_name = 'siteurl';")
+expected_url="https://${final_staging_domainName}"
+query=$(mysql --defaults-extra-file=${scriptPath}/.my.cnf -D ${staging_databaseName} -se "SELECT option_value FROM ${table_Prefix}options WHERE option_name = 'siteurl';")
 
-if [ "$query" != "$expected_staging_url" ]; then
-    echo "[+] ERROR: The site URL in the database ($query) does not match the expected staging URL ($expected_staging_url). The search and replace may have failed." 2>&1 | tee -a ${LogFile}
+if [ "$query" != "$expected_url" ]; then
+    echo "[+] ERROR: The site URL in the database ($query) does not match the expected URL ($expected_url). The search and replace may have failed." 2>&1 | tee -a ${LogFile}
     exit 1
 else
-    echo "[+] SUCCESS: Site URL in the database matches the expected staging URL ($expected_staging_url)." 2>&1 | tee -a ${LogFile}
+    echo "[+] SUCCESS: Site URL in the database matches the expected URL ($expected_url)." 2>&1 | tee -a ${LogFile}
 fi
 
-# Enable: Discourage search engines from indexing this website
+# Disable: Discourage search engines from indexing this website
 echo "[+] NOTICE: Enabling 'Discourage search engines from indexing this website'." 2>&1 | tee -a ${LogFile}
-mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf -D ${staging_databaseName} -e "
-UPDATE ${table_Prefix}options SET option_value = '0' WHERE option_name = 'blog_public';
+mysql --defaults-extra-file=${scriptPath}/.my.cnf -D ${staging_databaseName} -e "
+UPDATE ${table_Prefix}options SET option_value = '1' WHERE option_name = 'blog_public';
 " 2>&1 | tee -a ${LogFile}
 
 # Clean and remove specific directories before general cleanup
@@ -338,7 +345,7 @@ start_time=$(date +%s)
 if [ "$use_remote_server" = true ]; then
     rsync -azP --update --delete --no-perms --no-owner --no-group --no-times --exclude 'wp-content/cache/*' --exclude 'wp-content/backups-dup-pro/*' --exclude 'wp-config.php' --exclude '.user.ini' ${remote_server_ssh}:${websitePath}/ ${staging_websitePath}
 else
-    rsync -azP --update --delete --no-perms --no-owner --no-group --no-times --exclude 'wp-content/cache/*' --exclude 'wp-content/backups-dup-pro/*' --exclude 'wp-config.php' --exclude '.user.ini' ${websitePath}/ ${staging_websitePath}
+    rsync -azP --update --delete --no-perms --no-owner --no-group --no-times --exclude 'wp-content/cache/*' --exclude 'wp-content/backups-dup-pro/*' --exclude 'wp-config.php' --exclude '.user.ini' ${staging_websitePath}/ ${websitePath}
 fi
 
 end_time=$(date +%s)
@@ -352,26 +359,29 @@ fi
 
 # Set correct ownership
 echo "[+] NOTICE: Setting correct ownership." 2>&1 | tee -a ${LogFile}
-chown -Rf ${staging_siteUser}:${staging_siteUser} ${staging_websitePath}
+chown -Rf ${siteUser}:${siteUser} ${websitePath}
 
 # Set correct file permissions for folders
 echo "[+] NOTICE: Setting correct file permissions for folders." 2>&1 | tee -a ${LogFile}
-find ${staging_websitePath}/ -type d -exec chmod 755 {} + 2>&1 | tee -a ${LogFile}
+find ${websitePath}/ -type d -exec chmod 755 {} + 2>&1 | tee -a ${LogFile}
 
 # Set correct file permissions for files
 echo "[+] NOTICE: Setting correct file permissions for files." 2>&1 | tee -a ${LogFile}
-find ${staging_websitePath}/ -type f -exec chmod 644 {} + 2>&1 | tee -a ${LogFile}
+find ${websitePath}/ -type f -exec chmod 644 {} + 2>&1 | tee -a ${LogFile}
 
-# Flush & restart Redis
-echo "[+] NOTICE: Flushing and restarting Redis." 2>&1 | tee -a ${LogFile}
-redis-cli FLUSHALL
-sudo systemctl restart redis-server
-
-# Restart MySQL (using stop and start to avoid potential restart issues)
-echo "[+] NOTICE: Restarting the MySQL server." 2>&1 | tee -a ${LogFile}
-systemctl stop mysql
-systemctl start mysql
-systemctl status mysql | tee -a ${LogFile}
+# Handle MySQL and Server Restart Options
+if [ "$mysql_restart_method" = "restart" ]; then
+    echo "[+] NOTICE: Restarting MySQL service." 2>&1 | tee -a ${LogFile}
+    systemctl restart mysql
+elif [ "$mysql_restart_method" = "stop_start" ]; then
+    echo "[+] NOTICE: Stopping and then starting MySQL service." 2>&1 | tee -a ${LogFile}
+    systemctl stop mysql
+    sleep 5
+    systemctl start mysql
+elif [ "$mysql_restart_method" = "reboot" ]; then
+    echo "[+] NOTICE: Rebooting the server gracefully." 2>&1 | tee -a ${LogFile}
+    shutdown -r now
+fi
 
 # Record the end time of the script and calculate total runtime
 script_end_time=$(date +%s)

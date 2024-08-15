@@ -7,7 +7,7 @@
 # Author:             WP Speed Expert
 # Author URI:         https://wpspeedexpert.com
 # Version:            3.9.0
-# GitHub:             https://github.com/WPSpeedExpert/rsync-pull-wp/
+# GitHub:             https://github.com/WPSpeedExpert/rsync-pull/
 # To Make Executable: chmod +x rsync-pull-staging-to-production.sh
 # Crontab Schedule:   0 0 * * * /home/epicdeals/rsync-pull-staging-to-production.sh 2>&1
 # =========================================================================== #
@@ -310,7 +310,7 @@ fi
 # Enable: Discourage search engines from indexing this website
 echo "[+] NOTICE: Enabling 'Discourage search engines from indexing this website'." 2>&1 | tee -a ${LogFile}
 mysql --defaults-extra-file=${scriptPath}/.my.cnf -D ${databaseName} -e "
-UPDATE ${table_Prefix}options SET option_value = '0' WHERE option_name = 'blog_public';
+UPDATE ${table_Prefix}options SET option_value = '1' WHERE option_name = 'blog_public';
 " 2>&1 | tee -a ${LogFile}
 
 # Clean and remove specific directories before general cleanup
@@ -323,4 +323,60 @@ rm -rf ${websitePath}/wp-content/EWWW
 echo "[+] NOTICE: Cleaning up the destination website files: ${websitePath}" 2>&1 | tee -a ${LogFile}
 
 if [ "$keep_uploads_folder" = true ]; then
-    echo "[+] NOTICE
+    echo "[+] NOTICE: Keeping the uploads folder during cleanup." 2>&1 | tee -a ${LogFile}
+    find ${websitePath}/ -mindepth 1 ! -regex '^'${websitePath}'/wp-config.php' ! -regex '^'${websitePath}'/.user.ini' ! -regex '^'${websitePath}'/wp-content/uploads\(/.*\)?' -delete 2>&1 | tee -a ${LogFile}
+else
+    echo "[+] NOTICE: Deleting all files including the uploads folder." 2>&1 | tee -a ${LogFile}
+    find ${websitePath}/ -mindepth 1 ! -regex '^'${websitePath}'/wp-config.php' ! -regex '^'${websitePath}'/.user.ini' -delete 2>&1 | tee -a ${LogFile}
+fi
+
+# Rsync website files (pull)
+echo "[+] NOTICE: Starting Rsync pull." 2>&1 | tee -a ${LogFile}
+start_time=$(date +%s)
+
+if [ "$use_remote_server" = true ]; then
+    rsync -azP --update --delete --no-perms --no-owner --no-group --no-times --exclude 'wp-content/cache/*' --exclude 'wp-content/backups-dup-pro/*' --exclude 'wp-config.php' --exclude '.user.ini' ${remote_server_ssh}:${staging_websitePath}/ ${websitePath}
+else
+    rsync -azP --update --delete --no-perms --no-owner --no-group --no-times --exclude 'wp-content/cache/*' --exclude 'wp-content/backups-dup-pro/*' --exclude 'wp-config.php' --exclude '.user.ini' ${staging_websitePath}/ ${websitePath}
+fi
+
+end_time=$(date +%s)
+elapsed_time=$((end_time - start_time))
+echo "[+] NOTICE: Rsync pull took $elapsed_time seconds." 2>&1 | tee -a ${LogFile}
+
+if [ $? -ne 0 ]; then
+    echo "[+] ERROR: Failed to rsync website files. Aborting!" 2>&1 | tee -a ${LogFile}
+    exit 1
+fi
+
+# Set correct ownership
+echo "[+] NOTICE: Setting correct ownership." 2>&1 | tee -a ${LogFile}
+chown -Rf ${siteUser}:${siteUser} ${websitePath}
+
+# Set correct file permissions for folders
+echo "[+] NOTICE: Setting correct file permissions for folders." 2>&1 | tee -a ${LogFile}
+find ${websitePath}/ -type d -exec chmod 755 {} + 2>&1 | tee -a ${LogFile}
+
+# Set correct file permissions for files
+echo "[+] NOTICE: Setting correct file permissions for files." 2>&1 | tee -a ${LogFile}
+find ${websitePath}/ -type f -exec chmod 644 {} + 2>&1 | tee -a ${LogFile}
+
+# Flush & restart Redis
+echo "[+] NOTICE: Flushing and restarting Redis." 2>&1 | tee -a ${LogFile}
+redis-cli FLUSHALL
+sudo systemctl restart redis-server
+
+# Restart MySQL
+echo "[+] NOTICE: Restarting the MySQL server." 2>&1 | tee -a ${LogFile}
+systemctl restart mysql
+sleep 5
+systemctl status mysql
+
+# Record the end time of the script and calculate total runtime
+script_end_time=$(date +%s)
+total_runtime=$((script_end_time - script_start_time))
+echo "[+] NOTICE: Total script execution time: $total_runtime seconds." 2>&1 | tee -a ${LogFile}
+
+# End of the script
+echo "[+] NOTICE: End of script: $(TZ='Europe/Amsterdam' date)" 2>&1 | tee -a ${LogFile}
+exit 0

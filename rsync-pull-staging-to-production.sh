@@ -6,7 +6,7 @@
 # Requirements:       Cloudpanel, ssh-keygen, pv (Pipe Viewer)
 # Author:             WP Speed Expert
 # Author URI:         https://wpspeedexpert.com
-# Version:            3.9.0
+# Version:            3.9.1
 # GitHub:             https://github.com/WPSpeedExpert/rsync-pull-wp/
 # To Make Executable: chmod +x rsync-pull-staging-to-production.sh
 # Crontab Schedule:   0 0 * * * /home/epicdeals/rsync-pull-staging-to-production.sh 2>&1
@@ -367,11 +367,11 @@ echo "[+] NOTICE: Flushing and restarting Redis." 2>&1 | tee -a ${LogFile}
 redis-cli FLUSHALL
 sudo systemctl restart redis-server
 
-# Restart MySQL
+# Restart MySQL (using stop and start to avoid potential restart issues)
 echo "[+] NOTICE: Restarting the MySQL server." 2>&1 | tee -a ${LogFile}
-systemctl restart mysql
-sleep 5
-systemctl status mysql
+systemctl stop mysql
+systemctl start mysql
+systemctl status mysql | tee -a ${LogFile}
 
 # Record the end time of the script and calculate total runtime
 script_end_time=$(date +%s)

@@ -7,7 +7,7 @@
 # Requirements:       CloudPanel, ssh-keygen, pv (Pipe Viewer)
 # Author:             WP Speed Expert
 # Author URI:         https://wpspeedexpert.com
-# Version:            4.1.0
+# Version:            4.1.3
 # GitHub:             https://github.com/WPSpeedExpert/rsync-pull-wp/
 # To Make Executable: chmod +x rsync-pull-production-to-staging.sh
 # Crontab Schedule:   0 0 * * * /home/epicdeals/rsync-pull-production-to-staging.sh 2>&1
@@ -56,7 +56,9 @@ LogFile="${staging_scriptPath}/rsync-pull-production-to-staging.log"
 # - "default": Uses the standard method of uncompressing the SQL file and importing it using MySQL commands.
 # - "gunzip": Uncompresses the SQL file using gunzip and imports it using MySQL commands.
 # - "pv_gunzip": Uses Pipe Viewer (pv) to show progress while uncompressing the SQL file with gunzip and importing it via MySQL commands.
-import_methods=("default" "clpctl" "unzip_clpctl" "gunzip" "pv_gunzip")
+# - "mysql_unzip": Directly imports an uncompressed SQL file using the MySQL command-line client.
+# - "mysql_gunzip": Uncompresses the SQL file using gunzip and pipes it directly to the MySQL command-line client.
+import_methods=("clpctl" "unzip_clpctl" "default" "gunzip" "pv_gunzip" "mysql_unzip" "mysql_gunzip")
 
 # MySQL and Server Restart Options:
 # This variable determines how MySQL is managed and whether the server should be rebooted during the script's execution.
@@ -89,15 +91,48 @@ max_retries=3
 
 # Set to false if you do not want to keep the wp-content/uploads folder during cleanup
 # Typically set to true for very large websites with a large media library.
-keep_uploads_folder=true
+keep_uploads_folder=false
 
 # Set to true if you want to use an alternate domain name for the search and replace query
-use_alternate_domain=true
+use_alternate_domain=false
 
 # Alternate domain name (only used if use_alternate_domain is true)
 alternate_domainName="staging.${staging_domainName}"
 
-### Part 3: Initial Checks and Creating the wp-config.php File
+# ==============================================================================
+# Part 3: Function to rename .user.ini file if it exists
+# ==============================================================================
+
+rename_user_ini() {
+    if [ -f "${staging_websitePath}/.user.ini" ]; then
+        echo "[+] NOTICE: Renaming .user.ini to .user.ini.bak" 2>&1 | tee -a ${LogFile}
+        mv "${staging_websitePath}/.user.ini" "${staging_websitePath}/.user.ini.bak"
+        if [ $? -ne 0 ]; then
+            echo "[+] ERROR: Failed to rename .user.ini. Aborting!" 2>&1 | tee -a ${LogFile}
+            exit 1
+        fi
+    else
+        echo "[+] NOTICE: No .user.ini file found to rename." 2>&1 | tee -a ${LogFile}
+    fi
+}
+
+# Function to restore the original .user.ini file after the sync
+restore_user_ini() {
+    if [ -f "${staging_websitePath}/.user.ini.bak" ]; then
+        echo "[+] NOTICE: Restoring .user.ini from .user.ini.bak" 2>&1 | tee -a ${LogFile}
+        mv "${staging_websitePath}/.user.ini.bak" "${staging_websitePath}/.user.ini"
+        if [ $? -ne 0 ]; then
+            echo "[+] ERROR: Failed to restore .user.ini. Aborting!" 2>&1 | tee -a ${LogFile}
+            exit 1
+        fi
+    else
+        echo "[+] NOTICE: No .user.ini.bak file found to restore." 2>&1 | tee -a ${LogFile}
+    fi
+}
+
+# ==============================================================================
+# Part 4: Start of the script
+# ==============================================================================
 
 # Empty the log file if it exists
 if [ -f ${LogFile} ]; then
@@ -107,8 +142,81 @@ fi
 # Record the start time of the script
 script_start_time=$(date +%s)
 
-# Log the date and time (Amsterdam Time)
-echo "[+] NOTICE: Start script: $(TZ='Europe/Amsterdam' date)" 2>&1 | tee -a ${LogFile}
+# Log the date and time
+echo "[+] NOTICE: Start script: ${start_time}" 2>&1 | tee -a ${LogFile}
+
+# ==============================================================================
+# Part 5: Pre-execution Checks (Local and Remote)
+# ==============================================================================
+
+# 0. Check if .my.cnf Exists on the Local Server
+if [ ! -f "${staging_scriptPath}/.my.cnf" ]; then
+    echo "[+] ERROR: .my.cnf not found at ${staging_scriptPath}/.my.cnf" 2>&1 | tee -a ${LogFile}
+    exit 1
+else
+    echo "[+] .my.cnf found at ${staging_scriptPath}/.my.cnf" 2>&1 | tee -a ${LogFile}
+fi
+
+# 1. Check SSH Connection to Remote Server (Only if using a remote server)
+if [ "$use_remote_server" = true ]; then
+    echo "[+] Checking SSH connection to remote server: ${remote_server_ssh}" 2>&1 | tee -a ${LogFile}
+    if ssh -o BatchMode=yes -o ConnectTimeout=5 ${remote_server_ssh} 'true' 2>&1 | tee -a ${LogFile}; then
+        echo "[+] SSH connection to remote server established." 2>&1 | tee -a ${LogFile}
+    else
+        echo "[+] ERROR: SSH connection to remote server failed. Aborting!" 2>&1 | tee -a ${LogFile}
+        exit 1
+    fi
+fi
+
+# 2. Check if the Website Directory Exists on Remote or Local Server
+if [ "$use_remote_server" = true ]; then
+    # Remote server check
+    echo "[+] Checking if remote website directory exists: ${websitePath}" 2>&1 | tee -a ${LogFile}
+    if ssh ${remote_server_ssh} "[ -d ${websitePath} ]"; then
+        echo "[+] Remote website directory exists." 2>&1 | tee -a ${LogFile}
+    else
+        echo "[+] ERROR: Remote website directory does not exist. Aborting!" 2>&1 | tee -a ${LogFile}
+        exit 1
+    fi
+else
+    # Local server check
+    echo "[+] Checking if local website directory exists: ${websitePath}" 2>&1 | tee -a ${LogFile}
+    if [ -d ${websitePath} ]; then
+        echo "[+] Local website directory exists." 2>&1 | tee -a ${LogFile}
+    else
+        echo "[+] ERROR: Local website directory does not exist. Aborting!" 2>&1 | tee -a ${LogFile}
+        exit 1
+    fi
+fi
+
+# 3. Check if wp-config.php Exists to Confirm WordPress Installation (Remote or Local Server)
+is_wordpress_installation=false
+
+if [ "$use_remote_server" = true ]; then
+    # Remote server check
+    echo "[+] Checking if wp-config.php exists in remote directory." 2>&1 | tee -a ${LogFile}
+    remote_wp_config="${websitePath}/wp-config.php"
+    if ssh ${remote_server_ssh} "[ -f ${remote_wp_config} ]"; then
+        echo "[+] wp-config.php found in remote directory." 2>&1 | tee -a ${LogFile}
+        is_wordpress_installation=true
+    else
+        echo "[+] wp-config.php not found in remote directory, skipping WP checks." 2>&1 | tee -a ${LogFile}
+    fi
+else
+    # Local server check
+    echo "[+] Checking if wp-config.php exists in local directory." 2>&1 | tee -a ${LogFile}
+    local_wp_config="${websitePath}/wp-config.php"
+    if [ -f ${local_wp_config} ]; then
+        echo "[+] wp-config.php found in local directory." 2>&1 | tee -a ${LogFile}
+        is_wordpress_installation=true
+    else
+        echo "[+] wp-config.php not found in local directory, skipping WP checks." 2>&1 | tee -a ${LogFile}
+    fi
+fi
+
+# ==============================================================================
+# Part 6: Pre-execution Checks (Local) and Creating the wp-config.php File
+# ==============================================================================
 
 # Check for command dependencies
 for cmd in mysql rsync; do
@@ -250,9 +358,14 @@ if [ -f ${staging_websitePath}/wp-config.php ]; then
   echo "[+] SUCCESS: Found wp-config.php in ${staging_websitePath}"
 fi 2>&1 | tee -a ${LogFile}
 
+echo "[+] All pre-execution checks passed. Proceeding with script execution." 2>&1 | tee -a ${LogFile}
+
 # ==============================================================================
-# Part 4: Maintenance Page Creation and Initial Cleanup
+# Part 7: Maintenance Page Creation and Initial Cleanup
 # ==============================================================================
+
+# Rename .user.ini before any cleanup to ensure it is preserved
+rename_user_ini
 
 # Create a maintenance page
 echo "[+] NOTICE: Creating maintenance page as index.html" 2>&1 | tee -a ${LogFile}
@@ -264,19 +377,14 @@ cat <<EOF > ${staging_websitePath}/index.html
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Maintenance</title>
     <style>
-        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-        h1 { font-size: 50px; }
-        body { font: 20px Helvetica, sans-serif; color: #333; }
-        article { display: block; text-align: left; width: 650px; margin: 0 auto; }
-        a { color: #dc8100; text-decoration: none; }
-        a:hover { color: #333; text-decoration: none; }
+        body{font-family:Arial,sans-serif;text-align:center;padding:20px;color:#444;background-color:#f1f1f1;margin:0;}h1{font-size:36px;margin:20px 0;}article{display:block;text-align:left;max-width:1024px;margin:5% auto;padding:20px;background:#fff;border-radius:8px;box-shadow:0 0 10px rgba(0,0,0,0.1);}p{font-size:18px;line-height:1.6;}a{color:#0073aa;text-decoration:none;}a:hover{color:#005177;text-decoration:none;}@media (max-width:768px){h1{font-size:28px;}article{padding:15px;margin:10% auto;}}@media (max-width:480px){h1{font-size:24px;}p{font-size:16px;}article{padding:10px;}}
     </style>
 </head>
 <body>
     <article>
         <h1>We'll be back soon!</h1>
         <div>
-            <p>Sorry for the inconvenience but we're performing some maintenance at the moment. If you need to you can always <a href="mailto:someone@example.com">contact us</a>, otherwise we'll be back online shortly!</p>
+            <p>Sorry for the inconvenience but we're performing some maintenance at the moment. If you need to you can always <a href="mailto:${admin_email}">contact us</a>, otherwise we'll be back online shortly!</p>
             <p>&mdash; The Team</p>
         </div>
     </article>
@@ -286,8 +394,8 @@ EOF
 
 # Set correct ownership and permissions for the maintenance page
 echo "[+] NOTICE: Setting correct ownership and permissions for index.html" 2>&1 | tee -a ${LogFile}
-chown ${staging_siteUser}:${staging_siteUser} ${staging_websitePath}/index.html
-chmod 644 ${staging_websitePath}/index.html
+chown -Rf ${staging_siteUser}:${staging_siteUser} ${staging_websitePath}/index.html
+chmod 00755 -R ${staging_websitePath}/index.html
 
 # Clean and remove specific directories if they exist before general cleanup
 echo "[+] NOTICE: Deleting plugins, cache, and EWWW directories" 2>&1 | tee -a ${LogFile}
@@ -295,23 +403,19 @@ rm -rf ${staging_websitePath}/wp-content/plugins
 rm -rf ${staging_websitePath}/wp-content/cache
 rm -rf ${staging_websitePath}/wp-content/EWWW
 
-# Clean and remove destination website files (except for the wp-config.php, .user.ini, and index.html)
+# Clean and remove destination website files (except for the wp-config.php, .user.ini, .user.ini.bak, and index.html)
 echo "[+] NOTICE: Cleaning up the destination website files: ${staging_websitePath}" 2>&1 | tee -a ${LogFile}
 
 if [ "$keep_uploads_folder" = true ]; then
     echo "[+] NOTICE: Keeping the uploads folder during cleanup." 2>&1 | tee -a ${LogFile}
-    find ${staging_websitePath}/ -mindepth 1 ! -regex '^'${staging_websitePath}'/wp-config.php' ! -regex '^'${staging_websitePath}'/.user.ini' ! -regex '^'${staging_websitePath}'/index.html' ! -regex '^'${staging_websitePath}'/wp-content/uploads$begin:math:text$/.*$end:math:text$?' -delete 2>&1 | tee -a ${LogFile}
+    find ${staging_websitePath}/ -mindepth 1 ! -regex '^'${staging_websitePath}'/wp-config.php' ! -regex '^'${staging_websitePath}'/.user.ini' ! -regex '^'${staging_websitePath}'/.user.ini.bak' ! -regex '^'${staging_websitePath}'/index.html' ! -regex '^'${staging_websitePath}'/wp-content/uploads\(/.*\)?' -delete 2>&1 | tee -a ${LogFile}
 else
     echo "[+] NOTICE: Deleting all files including the uploads folder." 2>&1 | tee -a ${LogFile}
-    find ${staging_websitePath}/ -mindepth 1 ! -regex '^'${staging_websitePath}'/wp-config.php' ! -regex '^'${staging_websitePath}'/.user.ini' ! -regex '^'${staging_websitePath}'/index.html' -delete 2>&1 | tee -a ${LogFile}
+    find ${staging_websitePath}/ -mindepth 1 ! -regex '^'${staging_websitePath}'/wp-config.php' ! -regex '^'${staging_websitePath}'/.user.ini' ! -regex '^'${staging_websitePath}'/.user.ini.bak' ! -regex '^'${staging_websitePath}'/index.html' -delete 2>&1 | tee -a ${LogFile}
 fi
 
-# Pause for 120 seconds to test maintenance page
-echo "[+] NOTICE: Pausing for 120 seconds to test maintenance page." 2>&1 | tee -a ${LogFile}
-sleep 120
-
 # ==============================================================================
-# Part 5: Database Export from Production and Backup
+# Part 8: Database Export from Production and Backup
 # ==============================================================================
 
 # Export the production (source) MySQL database
@@ -359,7 +463,7 @@ if [ "$backup_staging_database" = true ]; then
 fi
 
 # ==============================================================================
-# Part 6: Database Recreation and Import
+# Part 9: Database Recreation and Import
 # ==============================================================================
 
 # Optionally delete and recreate the staging database, or drop all tables
@@ -373,8 +477,7 @@ if [ "$recreate_database" = true ]; then
     fi
 
     echo "[+] NOTICE: Adding the database: ${staging_databaseName}" 2>&1 | tee -a ${LogFile}
-    clpctl db:add --domainName=${staging_domainName} --databaseName=${staging_databaseName} --databaseUserName=${staging_databaseUserName} --databaseUserPassword=''${databaseUserPassword}'' 2>&1 | tee -a ${LogFile}
-
+    clpctl db:add --domainName=${staging_domainName} --databaseName=${staging_databaseName} --databaseUserName=${staging_databaseUserName} --databaseUserPassword="${staging_databaseUserPassword}" 2>&1 | tee -a ${LogFile}
     if [ $? -ne 0 ]; then
         echo "[+] ERROR: Failed to add the staging database. Aborting!" 2>&1 | tee -a ${LogFile}
         exit 1
@@ -394,15 +497,18 @@ else
 fi
 
 # ==============================================================================
-# Part 7: Database Import Function and URL Update
+# Part 10: Database Import Function and URL Update
 # ==============================================================================
 
 # Function to import the database using different methods
 import_database() {
     method=$1
     echo "[+] NOTICE: Importing the MySQL database using method: $method" 2>&1 | tee -a ${LogFile}
+
+    # Record the start time of the database import process
     start_time=$(date +%s)
 
+    # Database import logic
     if [ "$method" = "clpctl" ]; then
         clpctl db:import --databaseName=${staging_databaseName} --file=${staging_scriptPath}/tmp/${databaseName}.sql.gz 2>&1 | tee -a ${LogFile}
     elif [ "$method" = "unzip_clpctl" ]; then
@@ -412,6 +518,12 @@ import_database() {
         gunzip -c ${staging_scriptPath}/tmp/${databaseName}.sql.gz | mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf ${staging_databaseName} 2>&1 | tee -a ${LogFile}
     elif [ "$method" = "pv_gunzip" ] && [ "$use_pv" = true ]; then
         pv ${staging_scriptPath}/tmp/${databaseName}.sql.gz | gunzip | mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf ${staging_databaseName} 2>&1 | tee -a ${LogFile}
+    elif [ "$method" = "mysql_unzip" ]; then
+        # Unzip the file first before using the mysql command-line client
+        gunzip -c ${staging_scriptPath}/tmp/${databaseName}.sql.gz > ${staging_scriptPath}/tmp/${databaseName}.sql
+        mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf ${staging_databaseName} < ${staging_scriptPath}/tmp/${databaseName}.sql 2>&1 | tee -a ${LogFile}
+    elif [ "$method" = "mysql_gunzip" ]; then
+        gunzip -c ${staging_scriptPath}/tmp/${databaseName}.sql.gz | mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf ${staging_databaseName} 2>&1 | tee -a ${LogFile}
     else
         echo "[+] NOTICE: Using default import method without pv." 2>&1 | tee -a ${LogFile}
         gunzip -c ${staging_scriptPath}/tmp/${databaseName}.sql.gz | mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf ${staging_databaseName} 2>&1 | tee -a ${LogFile}
@@ -421,69 +533,91 @@ import_database() {
         echo "[+] ERROR: Failed to import the MySQL database using method: $method" 2>&1 | tee -a ${LogFile}
         return 1
     fi
+
+    # Record the end time and calculate the elapsed time
+    end_time=$(date +%s)
+    elapsed_time=$((end_time - start_time))
+
+    # Convert elapsed time to hours, minutes, and seconds
+    hours=$((elapsed_time / 3600))
+    minutes=$(( (elapsed_time % 3600) / 60 ))
+    seconds=$((elapsed_time % 60))
+
+    # Display the elapsed time in a human-readable format
+    echo "[+] NOTICE: Database import took ${hours} hours, ${minutes} minutes, and ${seconds} seconds." 2>&1 | tee -a ${LogFile}
+
+    # Define the expected site URL based on the provided domain name
+    expected_url="https://${domainName}"
+
+    # Query the database to check the current site URL stored in the options table
+    query=$(mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf -D ${staging_databaseName} -se "SELECT option_value FROM ${table_Prefix}options WHERE option_name = 'siteurl';")
+
+    # Compare the queried site URL with the expected URL
+    if [ "$query" != "$expected_url" ]; then
+        # If the URLs do not match, log an error and return an error code
+        echo "[+] ERROR: The site URL in the database ($query) does not match the expected URL ($expected_url). The database import may have failed." 2>&1 | tee -a ${LogFile}
+
+        # Add a delay before checking the URL again to allow the database to stabilize
+        sleep 2
+
+        # Re-check the site URL after the delay
+        query=$(mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf -D ${staging_databaseName} -se "SELECT option_value FROM ${table_Prefix}options WHERE option_name = 'siteurl';")
+
+        if [ "$query" != "$expected_url" ]; then
+            echo "[+] ERROR: The site URL in the database ($query) still does not match the expected URL ($expected_url). The database import may have failed." 2>&1 | tee -a ${LogFile}
+            return 1  # Return 1 to indicate failure (assuming this is within a function)
+        else
+            echo "[+] SUCCESS: Site URL in the database matches the expected URL ($expected_url) after delay." 2>&1 | tee -a ${LogFile}
+            return 0  # Return 0 to indicate success (assuming this is within a function)
+        fi
+    else
+        # If the URLs match, log a success message and return success
+        echo "[+] SUCCESS: Site URL in the database matches the expected URL ($expected_url)." 2>&1 | tee -a ${LogFile}
+        return 0  # Return 0 to indicate success (assuming this is within a function)
+    fi
 }
 
-# Record the end time of the database import process
-end_time=$(date +%s)
-
-# Calculate the elapsed time for the database import process
-elapsed_time=$((end_time - start_time))
-
-# Log the time taken for the database import to complete
-echo "[+] NOTICE: Database import took $elapsed_time seconds." 2>&1 | tee -a ${LogFile}
-
-# Check if the previous command (database import) was successful
-if [ $? -ne 0 ]; then
-    # If the import failed, log an error message and return an error code
-    echo "[+] ERROR: Failed to import the MySQL database using method: $method" 2>&1 | tee -a ${LogFile}
-    return 1
-fi
-
-# Define the expected site URL based on the provided domain name
-expected_url="https://${staging_domainName}"
-
-# Query the database to check the current site URL stored in the options table
-query=$(mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf -D ${staging_databaseName} -se "SELECT option_value FROM ${table_Prefix}options WHERE option_name = 'siteurl';")
-
-# Compare the queried site URL with the expected URL
-if [ "$query" != "$expected_url" ]; then
-    # If the URLs do not match, log an error and return an error code
-    echo "[+] ERROR: The site URL in the database ($query) does not match the expected URL ($expected_url). The database import may have failed." 2>&1 | tee -a ${LogFile}
-    return 1
-else
-    # If the URLs match, log a success message and return success
-    echo "[+] SUCCESS: Site URL in the database matches the expected URL ($expected_url)." 2>&1 | tee -a ${LogFile}
-    return 0
-fi
-
 # ==============================================================================
-# Part 8: Retry Mechanism for Database Import
+# Part 11: Retry Mechanism for Database Import
 # ==============================================================================
 
-# Sequentially try different methods if import fails
+# This section will attempt to import the database using various methods. If one method fails,
+# it retries up to a specified maximum number of times before moving on to the next method.
+
+# Initialize a flag to track if the import was successful
 import_success=false
 
+# Loop through each import method specified in the import_methods array
 for method in "${import_methods[@]}"; do
+    # Initialize the retry count for the current method
     retry_count=0
+
+    # Attempt the import, retrying up to max_retries times if it fails
     while [ $retry_count -lt $max_retries ]; do
-        import_database $method
+        import_database $method  # Call the function to perform the database import
+
+        # Check if the import was successful
         if [ $? -eq 0 ]; then
+            # If successful, set the import_success flag to true and break the loop
             import_success=true
-            break
+            break  # Exit the retry loop for this method
         else
+            # If the import failed, increment the retry count and log a warning
             echo "[+] WARNING: Import method $method failed. Retrying ($((retry_count + 1))/$max_retries)..." 2>&1 | tee -a ${LogFile}
             retry_count=$((retry_count + 1))
         fi
     done
 
+    # If the import was successful, break out of the loop over methods
     if [ "$import_success" = true ]; then
-        break
+        break  # Exit the loop over methods
     fi
 done
 
+# If none of the import methods were successful after all retries, log an error and abort the script
 if [ "$import_success" = false ]; then
     echo "[+] ERROR: All import methods failed after trying each method $max_retries times. Aborting!" 2>&1 | tee -a ${LogFile}
-    exit 1
+    exit 1  # Exit the script with a failure status
 fi
 
 # Remove the MySQL database export file from the staging environment
@@ -491,29 +625,32 @@ fi
 echo "[+] NOTICE: Deleting the database export file: ${staging_scriptPath}/tmp/${databaseName}.sql.gz" 2>&1 | tee -a ${LogFile}
 rm ${staging_scriptPath}/tmp/${databaseName}.sql.gz
 
-### Part 9: Search and Replace URLs and Rsync Website Files
+# ==============================================================================
+# Part 12: Search and Replace URLs and Rsync Website Files
+# ==============================================================================
 
 # Determine the domain to use for the search and replace operation
-# If an alternate domain is specified, use it; otherwise, use the production domain
+# If an alternate domain is specified, use it; otherwise, use the staging domain
 if [ "$use_alternate_domain" = true ]; then
     final_domainName="$alternate_domainName"
     echo "[+] NOTICE: Using alternate domain for search and replace: ${final_domainName}" 2>&1 | tee -a ${LogFile}
 else
-    final_domainName="$domainName"
+    final_domainName="$staging_domainName"
+    echo "[+] NOTICE: Using staging domain for search and replace: ${final_domainName}" 2>&1 | tee -a ${LogFile}
 fi
 
 # Perform search and replace in the staging database
 # This replaces all instances of the production domain with the staging domain (or alternate domain)
 echo "[+] NOTICE: Performing search and replace of URLs in the staging database: ${staging_databaseName}." 2>&1 | tee -a ${LogFile}
 mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf -D ${staging_databaseName} -e "
-UPDATE ${table_Prefix}options SET option_value = REPLACE (option_value, 'https://${domainName}', 'https://${final_domainName}') WHERE option_name = 'home' OR option_name = 'siteurl';
-UPDATE ${table_Prefix}posts SET post_content = REPLACE (post_content, 'https://${domainName}', 'https://${final_domainName}');
-UPDATE ${table_Prefix}posts SET post_excerpt = REPLACE (post_excerpt, 'https://${domainName}', 'https://${final_domainName}');
-UPDATE ${table_Prefix}postmeta SET meta_value = REPLACE (meta_value, 'https://${domainName}', 'https://${final_domainName}');
-UPDATE ${table_Prefix}termmeta SET meta_value = REPLACE (meta_value, 'https://${domainName}', 'https://${final_domainName}');
-UPDATE ${table_Prefix}comments SET comment_content = REPLACE (comment_content, 'https://${domainName}', 'https://${final_domainName}');
-UPDATE ${table_Prefix}comments SET comment_author_url = REPLACE (comment_author_url, 'https://${domainName}','https://${final_domainName}');
-UPDATE ${table_Prefix}posts SET guid = REPLACE (guid, 'https://${domainName}', 'https://${final_domainName}') WHERE post_type = 'attachment';
+UPDATE ${table_Prefix}options SET option_value = REPLACE(option_value, 'https://${domainName}', 'https://${final_domainName}') WHERE option_name = 'home' OR option_name = 'siteurl';
+UPDATE ${table_Prefix}posts SET post_content = REPLACE(post_content, 'https://${domainName}', 'https://${final_domainName}');
+UPDATE ${table_Prefix}posts SET post_excerpt = REPLACE(post_excerpt, 'https://${domainName}', 'https://${final_domainName}');
+UPDATE ${table_Prefix}postmeta SET meta_value = REPLACE(meta_value, 'https://${domainName}', 'https://${final_domainName}');
+UPDATE ${table_Prefix}termmeta SET meta_value = REPLACE(meta_value, 'https://${domainName}', 'https://${final_domainName}');
+UPDATE ${table_Prefix}comments SET comment_content = REPLACE(comment_content, 'https://${domainName}', 'https://${final_domainName}');
+UPDATE ${table_Prefix}comments SET comment_author_url = REPLACE(comment_author_url, 'https://${domainName}','https://${final_domainName}');
+UPDATE ${table_Prefix}posts SET guid = REPLACE(guid, 'https://${domainName}', 'https://${final_domainName}') WHERE post_type = 'attachment';
 " 2>&1 | tee -a ${LogFile}
 
 # Check if the search and replace operation was successful
@@ -541,7 +678,7 @@ UPDATE ${table_Prefix}options SET option_value = '0' WHERE option_name = 'blog_p
 " 2>&1 | tee -a ${LogFile}
 
 # ==============================================================================
-# Part 10: Rsync Website Files from Production to Staging
+# Part 13: Rsync Website Files from Production to Staging
 # ==============================================================================
 
 # Start the process of synchronizing website files from production to staging
@@ -550,36 +687,28 @@ start_time=$(date +%s)
 
 # Rsync files from the production environment to the staging environment
 if [ "$use_remote_server" = true ]; then
-    # If the production site is on a remote server, sync files from the remote server to the local staging path
     rsync -azP --update --delete --no-perms --no-owner --no-group --no-times \
-          --exclude 'wp-content/cache/*' --exclude 'wp-content/backups-dup-pro/*' \
-          --exclude 'wp-config.php' --exclude '.user.ini' --exclude 'index.php' \
+          --exclude '/index.php' --exclude 'wp-content/cache/*' --exclude 'wp-content/backups-dup-pro/*' \
+          --exclude 'wp-config.php' --exclude '.user.ini.bak' --exclude '.user.ini' \
           ${remote_server_ssh}:${websitePath}/ ${staging_websitePath}/
 else
-    # If both production and staging are on the same local server, sync directly from production to staging
     rsync -azP --update --delete --no-perms --no-owner --no-group --no-times \
-          --exclude 'wp-content/cache/*' --exclude 'wp-content/backups-dup-pro/*' \
-          --exclude 'wp-config.php' --exclude '.user.ini' --exclude 'index.php' \
+          --exclude '/index.php' --exclude 'wp-content/cache/*' --exclude 'wp-content/backups-dup-pro/*' \
+          --exclude 'wp-config.php' --exclude '.user.ini.bak' --exclude '.user.ini' \
           ${websitePath}/ ${staging_websitePath}/
 fi
-
-# Ensure the 'index.php' file is synced last to avoid potential issues during the process
-if [ "$use_remote_server" = true ]; then
-    rsync -azP --update --delete --no-perms --no-owner --no-group --no-times \
-          ${remote_server_ssh}:${websitePath}/index.php ${staging_websitePath}/index.php
-else
-    rsync -azP --update --delete --no-perms --no-owner --no-group --no-times \
-          ${websitePath}/index.php ${staging_websitePath}/index.php
-fi
-
-# Clean up by deleting the temporary maintenance page ('index.html') from the staging environment
-echo "[+] NOTICE: Deleting the maintenance page (index.html)" 2>&1 | tee -a ${LogFile}
-rm -f ${staging_websitePath}/index.html
 
 # Calculate and log the total time taken for the Rsync operation
 end_time=$(date +%s)
 elapsed_time=$((end_time - start_time))
-echo "[+] NOTICE: Rsync pull took $elapsed_time seconds." 2>&1 | tee -a ${LogFile}
+
+# Convert elapsed time to hours, minutes, and seconds
+hours=$((elapsed_time / 3600))
+minutes=$(( (elapsed_time % 3600) / 60 ))
+seconds=$((elapsed_time % 60))
+
+# Display the elapsed time in a human-readable format
+echo "[+] NOTICE: Rsync pull took ${hours} hours, ${minutes} minutes, and ${seconds} seconds." 2>&1 | tee -a ${LogFile}
 
 # Check if the Rsync operation was successful and handle any errors
 if [ $? -ne 0 ]; then
@@ -588,23 +717,48 @@ if [ $? -ne 0 ]; then
 fi
 
 # ==============================================================================
-# Part 11: Post-Rsync File Permission and Ownership Fixes
+# Part 14: Post-Rsync File Permission and Ownership Fixes
 # ==============================================================================
 
 # Set correct ownership
-echo "[+] NOTICE: Setting correct ownership." 2>&1 | tee -a ${LogFile}
+echo "[+] NOTICE: Set correct ownership (${staging_siteUser})." 2>&1 | tee -a ${LogFile}
 chown -Rf ${staging_siteUser}:${staging_siteUser} ${staging_websitePath}
 
 # Set correct file permissions for folders
-echo "[+] NOTICE: Setting correct file permissions for folders." 2>&1 | tee -a ${LogFile}
-find ${staging_websitePath}/ -type d -exec chmod 755 {} + 2>&1 | tee -a ${LogFile}
+echo "[+] NOTICE: Setting correct file permissions (755) for folders." 2>&1 | tee -a ${LogFile}
+chmod 00755 -R ${staging_websitePath}
 
 # Set correct file permissions for files
-echo "[+] NOTICE: Setting correct file permissions for files." 2>&1 | tee -a ${LogFile}
-find ${staging_websitePath}/ -type f -exec chmod 644 {} + 2>&1 | tee -a ${LogFile}
+echo "[+] NOTICE: Set correct permissions (644) for files." 2>&1 | tee -a ${LogFile}
+find ${staging_websitePath}/ -type f -print0 | xargs -0 chmod 00644
 
 # ==============================================================================
-# Part 12: Redis Flush and Restart
+# Part 15: Final Rsync and Remove Maintenance Page After Setting File Permissions
+# ==============================================================================
+
+# Ensure the root 'index.php' file is synced last to avoid potential issues during the process
+if [ "$use_remote_server" = true ]; then
+    rsync -azP --update --delete --no-perms --no-owner --no-group --no-times \
+          ${remote_server_ssh}:${websitePath}/index.php ${staging_websitePath}/index.php
+else
+    rsync -azP --update --delete --no-perms --no-owner --no-group --no-times \
+          ${websitePath}/index.php ${staging_websitePath}/index.php
+fi
+
+# Set correct ownership and permissions for the index.php page
+echo "[+] NOTICE: Setting correct ownership and permissions for index.php" 2>&1 | tee -a ${LogFile}
+chown -Rf ${staging_siteUser}:${staging_siteUser} ${staging_websitePath}/index.php
+chmod 00755 -R ${staging_websitePath}/index.php
+
+# Clean up by deleting the temporary maintenance page ('index.html') from the staging environment
+echo "[+] NOTICE: Deleting the maintenance page (index.html)" 2>&1 | tee -a ${LogFile}
+rm -f ${staging_websitePath}/index.html
+
+# Restore .user.ini by renaming from backup if it exists
+restore_user_ini
+
+# ==============================================================================
+# Part 16: Redis Flush and Restart
 # ==============================================================================
 
 # Flush & restart Redis
@@ -619,7 +773,7 @@ echo "[+] Redis server status after restart:" 2>&1 | tee -a ${LogFile}
 systemctl status redis-server 2>&1 | tee -a ${LogFile}
 
 # ==============================================================================
-# Part 13: MySQL Restart and Script Completion
+# Part 17: MySQL Restart and Script Completion
 # ==============================================================================
 
 # Handle MySQL restart based on chosen method
@@ -672,15 +826,30 @@ esac
 
 # Calculate elapsed time for the chosen action
 elapsed_time=$((end_time - start_time))
-echo "[+] NOTICE: MySQL $mysql_restart_method took $elapsed_time seconds." 2>&1 | tee -a ${LogFile}
+
+# Convert elapsed time to hours, minutes, and seconds
+hours=$((elapsed_time / 3600))
+minutes=$(( (elapsed_time % 3600) / 60 ))
+seconds=$((elapsed_time % 60))
+
+# Display the elapsed time in a human-readable format
+echo "[+] NOTICE: MySQL $mysql_restart_method took ${hours} hours, ${minutes} minutes, and ${seconds} seconds." 2>&1 | tee -a ${LogFile}
 
 # Record the end time of the script and calculate total runtime (excluding reboot scenario)
 if [ "$mysql_restart_method" != "reboot" ]; then
     script_end_time=$(date +%s)
     total_runtime=$((script_end_time - script_start_time))
-    echo "[+] NOTICE: Total script execution time: $total_runtime seconds." 2>&1 | tee -a ${LogFile}
+
+    # Convert total runtime to hours, minutes, and seconds
+    hours=$((total_runtime / 3600))
+    minutes=$(( (total_runtime % 3600) / 60 ))
+    seconds=$((total_runtime % 60))
+
+    # Display the total runtime in a human-readable format
+    echo "[+] NOTICE: Total script execution time: ${hours} hours, ${minutes} minutes, and ${seconds} seconds." 2>&1 | tee -a ${LogFile}
 fi
 
-# End of the script
-echo "[+] NOTICE: End of script: $(TZ='Europe/Amsterdam' date)" 2>&1 | tee -a ${LogFile}
+# Log the end time with the correct timezone
+end_time=$(TZ=$timezone date)
+echo "[+] NOTICE: End of script: ${end_time}" 2>&1 | tee -a ${LogFile}
 exit 0

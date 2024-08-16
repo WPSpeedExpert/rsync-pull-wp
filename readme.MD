@@ -4,8 +4,8 @@
   </a>
 </p>
 
-# Rsync Production to Staging | CloudPanel to CloudPanel
-The Rsync Production to Staging script is a high-performance, robust solution designed to synchronize large-scale WordPress websites from a production environment to a staging environment. It is specifically optimized for Linux systems running CloudPanel and WordPress, providing advanced logging, flexible database import techniques, and robust error handling. This script is ideal for web administrators looking to maintain an up-to-date staging environment for testing and development.
+# Rsync Pull WordPress | CloudPanel to CloudPanel
+The Rsync Pull script is a high-performance, robust solution designed to synchronize large-scale WordPress websites from a production environment to a staging environment and vice versa. It is specifically optimized for Linux systems running CloudPanel and WordPress, providing advanced logging, flexible database import techniques, and robust error handling. This script is ideal for web administrators looking to maintain an up-to-date staging environment for testing and development.
 
 ## Features
 - High-Performance Syncing: Leverages rsync for efficient file synchronization between production and staging environments.

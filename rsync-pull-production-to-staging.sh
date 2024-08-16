@@ -7,7 +7,7 @@
 # Requirements:       CloudPanel, ssh-keygen, pv (Pipe Viewer)
 # Author:             WP Speed Expert
 # Author URI:         https://wpspeedexpert.com
-# Version:            4.1.0
+# Version:            3.9.3
 # GitHub:             https://github.com/WPSpeedExpert/rsync-pull-wp/
 # To Make Executable: chmod +x rsync-pull-production-to-staging.sh
 # Crontab Schedule:   0 0 * * * /home/epicdeals/rsync-pull-production-to-staging.sh 2>&1
@@ -490,6 +490,7 @@ fi
 # The file is named after the production database but resides in the staging environment's temporary directory
 echo "[+] NOTICE: Deleting the database export file: ${staging_scriptPath}/tmp/${databaseName}.sql.gz" 2>&1 | tee -a ${LogFile}
 rm ${staging_scriptPath}/tmp/${databaseName}.sql.gz
+rm -f ${staging_scriptPath}/tmp/${databaseName}.sql
 
 ### Part 9: Search and Replace URLs and Rsync Website Files
 

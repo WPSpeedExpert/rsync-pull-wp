@@ -56,7 +56,7 @@ LogFile="${staging_scriptPath}/rsync-pull-production-to-staging.log"
 # - "default": Uses the standard method of uncompressing the SQL file and importing it using MySQL commands.
 # - "gunzip": Uncompresses the SQL file using gunzip and imports it using MySQL commands.
 # - "pv_gunzip": Uses Pipe Viewer (pv) to show progress while uncompressing the SQL file with gunzip and importing it via MySQL commands.
-import_methods=("clpctl" "unzip_clpctl" "default" "gunzip" "pv_gunzip")
+import_methods=("default" "clpctl" "unzip_clpctl" "gunzip" "pv_gunzip")
 
 # MySQL and Server Restart Options:
 # This variable determines how MySQL is managed and whether the server should be rebooted during the script's execution.

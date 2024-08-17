@@ -7,7 +7,7 @@
 # Requirements:       CloudPanel, ssh-keygen, pv (Pipe Viewer)
 # Author:             WP Speed Expert
 # Author URI:         https://wpspeedexpert.com
-# Version:            4.1.3
+# Version:            4.4.4
 # GitHub:             https://github.com/WPSpeedExpert/rsync-pull-wp/
 # To Make Executable: chmod +x rsync-pull-production-to-staging.sh
 # Crontab Schedule:   0 0 * * * /home/epicdeals/rsync-pull-production-to-staging.sh 2>&1
@@ -29,8 +29,19 @@ staging_siteUser=("staging_siteUser")
 use_remote_server=true
 remote_server_ssh="root@0.0.0.0"
 
-# Database password for the staging (destination) database from .my.cnf
-databaseUserPassword=$(sed -n 's/^password\s*=\s*"\(.*\)".*/\1/p' "${staging_scriptPath}/.my.cnf")
+# Admin email for contact and alerts
+admin_email="someone@example.com"
+
+# Define the timezone variable (Default: Europe/Amsterdam)
+# To find your correct time zone, you can use the 'timedatectl' command on a Linux system or visit the IANA time zone database at https://www.iana.org/time-zones.
+timezone="Europe/Amsterdam"
+
+# Log the date and time with the correct timezone
+start_time=$(TZ=$timezone date)
+
+# Set the table prefix for WordPress database tables.
+# Default is 'wp_' but may vary if customized.
+table_Prefix=("wp_")
 
 # Source | Production
 databaseName=${siteUser} # change if different from siteUser
@@ -46,19 +57,27 @@ staging_scriptPath="/home/${staging_siteUser}"
 
 LogFile="${staging_scriptPath}/rsync-pull-production-to-staging.log"
 
+# Database password for the staging (destination) database from .my.cnf
+staging_databaseUserPassword=$(sed -n 's/^password\s*=\s*"\(.*\)".*/\1/p' "${staging_scriptPath}/.my.cnf")
+
 # ==============================================================================
-# Part 2: Database Import Techniques, MySQL Restart Methods, and Backup Options
+# Part 2: Database Import, MySQL Management, and Key Settings
 # ==============================================================================
 
+# Set this variable to true if you want to use pv (Pipe Viewer) for showing progress during database import.
+# Note: pv is only compatible with the following methods: "mysql_gunzip", "mysql_unzip", "gunzip", "default".
+# Set it to false if you are running the script via cron or do not require progress display.
+use_pv=false
+
 # Database import method control:
-# - "clpctl": Uses the clpctl tool directly to import the compressed SQL file.
-# - "unzip_clpctl": Unzips the SQL file and then uses clpctl to import the unzipped file.
-# - "default": Uses the standard method of uncompressing the SQL file and importing it using MySQL commands.
-# - "gunzip": Uncompresses the SQL file using gunzip and imports it using MySQL commands.
-# - "pv_gunzip": Uses Pipe Viewer (pv) to show progress while uncompressing the SQL file with gunzip and importing it via MySQL commands.
-# - "mysql_unzip": Directly imports an uncompressed SQL file using the MySQL command-line client.
-# - "mysql_gunzip": Uncompresses the SQL file using gunzip and pipes it directly to the MySQL command-line client.
-import_methods=("clpctl" "unzip_clpctl" "default" "gunzip" "pv_gunzip" "mysql_unzip" "mysql_gunzip")
+# Choose the method for importing the database. The available options are:
+# - "clpctl": Use CloudPanel's clpctl tool to directly import the compressed SQL file.
+# - "unzip_clpctl": Unzip the SQL file first, then use clpctl to import the unzipped file.
+# - "mysql_gunzip": Uncompress the SQL file using gunzip and pipe it directly into MySQL.
+# - "mysql_unzip": Import an already uncompressed SQL file using the MySQL command-line client.
+# - "gunzip": Uncompress the SQL file using gunzip and import it directly using MySQL commands.
+# - "default": Standard method that unzips the SQL file and imports it using MySQL commands.
+import_methods=("clpctl" "unzip_clpctl" "mysql_gunzip" "mysql_unzip" "gunzip" "default")
 
 # MySQL and Server Restart Options:
 # This variable determines how MySQL is managed and whether the server should be rebooted during the script's execution.
@@ -67,9 +86,6 @@ import_methods=("clpctl" "unzip_clpctl" "default" "gunzip" "pv_gunzip" "mysql_un
 # - "reboot": Performs a graceful shutdown and reboots the entire server, ensuring all services restart.
 # - "none": No action is taken regarding MySQL or the server, preserving the current state.
 mysql_restart_method="stop_start"
-
-# Use PV (Pipe Viewer) for monitoring progress manually during import (set to true or false).
-use_pv=true
 
 # Install PV if not installed (set to true or false).
 install_pv_if_missing=true
@@ -85,9 +101,9 @@ backup_staging_database=true
 # Set to false if you prefer to drop all tables in the staging database instead of deleting the entire database.
 recreate_database=true
 
-# Set to true to enable automated retry on import failure (maximum retries: 3)
+# Set to true to enable automated retry on import failure (maximum retries: 2)
 enable_automatic_retry=true
-max_retries=3
+max_retries=1
 
 # Set to false if you do not want to keep the wp-content/uploads folder during cleanup
 # Typically set to true for very large websites with a large media library.
@@ -99,10 +115,18 @@ use_alternate_domain=false
 # Alternate domain name (only used if use_alternate_domain is true)
 alternate_domainName="staging.${staging_domainName}"
 
+# Option to enable or disable database maintenance after import
+perform_database_maintenance=true  # Set to false if you don't want to perform maintenance
+
 # ==============================================================================
-# Part 3: Function to rename .user.ini file if it exists
+# Part 3: Functions
 # ==============================================================================
 
+# ------------------------------------------------------------------------------
+# Function: rename_user_ini
+# Description: Renames the .user.ini file to .user.ini.bak if it exists, ensuring
+#              that the file is preserved during the sync process.
+# ------------------------------------------------------------------------------
 rename_user_ini() {
     if [ -f "${staging_websitePath}/.user.ini" ]; then
         echo "[+] NOTICE: Renaming .user.ini to .user.ini.bak" 2>&1 | tee -a ${LogFile}
@@ -116,7 +140,11 @@ rename_user_ini() {
     fi
 }
 
-# Function to restore the original .user.ini file after the sync
+# ------------------------------------------------------------------------------
+# Function: restore_user_ini
+# Description: Restores the original .user.ini file from the backup
+#              (.user.ini.bak) after the sync process is complete.
+# ------------------------------------------------------------------------------
 restore_user_ini() {
     if [ -f "${staging_websitePath}/.user.ini.bak" ]; then
         echo "[+] NOTICE: Restoring .user.ini from .user.ini.bak" 2>&1 | tee -a ${LogFile}
@@ -127,6 +155,124 @@ restore_user_ini() {
         fi
     else
         echo "[+] NOTICE: No .user.ini.bak file found to restore." 2>&1 | tee -a ${LogFile}
+    fi
+}
+
+# ==============================================================================
+# Function: choose_import_method
+# Description: Determines the appropriate import method based on the use_pv setting.
+#              If use_pv is true, methods utilizing pv will be selected. Otherwise,
+#              standard methods are chosen.
+# ==============================================================================
+choose_import_method() {
+    local method=$1
+    if [ "$use_pv" = true ]; then
+        # Use methods involving Pipe Viewer (pv) for progress display
+        case "$method" in
+            "mysql_gunzip")
+                echo "pv_gunzip"
+                ;;
+            "mysql_unzip")
+                echo "pv_unzip"
+                ;;
+            "gunzip")
+                echo "pv_gunzip"
+                ;;
+            "default")
+                echo "pv_default"
+                ;;
+            *)
+                echo "$method"
+                ;;
+        esac
+    else
+        # Use standard methods without pv
+        case "$method" in
+            "pv_gunzip")
+                echo "mysql_gunzip"
+                ;;
+            "pv_unzip")
+                echo "mysql_unzip"
+                ;;
+            "pv_default")
+                echo "default"
+                ;;
+            *)
+                echo "$method"
+                ;;
+        esac
+    fi
+}
+
+# ==============================================================================
+# Function: check_database_integrity
+# Description: Ensures key WordPress tables exist and contain data in the
+#              staging database. Logs an error and returns 1 if any table is
+#              missing or empty; returns 0 if all checks pass.
+# ==============================================================================
+check_database_integrity() {
+    echo "[+] NOTICE: Checking database integrity for selected tables." 2>&1 | tee -a ${LogFile}
+
+    # List of relevant tables for WordPress
+    required_tables=(
+        "options"
+        "posts"
+        "postmeta"
+        "terms"
+        "term_taxonomy"
+        "term_relationships"
+        "usermeta"
+        "users"
+    )
+
+    # Loop through each table and check if it exists and has data
+    for table in "${required_tables[@]}"; do
+        full_table_name="${table_Prefix}${table}"
+
+        # Check if the table exists
+        table_exists=$(mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf -D ${staging_databaseName} -e "SHOW TABLES LIKE '$full_table_name';" | grep "$full_table_name")
+
+        if [ -z "$table_exists" ]; then
+            echo "[+] ERROR: Table $full_table_name does not exist. Import may have failed." 2>&1 | tee -a ${LogFile}
+            return 1
+        else
+            # If the table exists, check if it has data
+            row_count=$(mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf -D ${staging_databaseName} -e "SELECT COUNT(*) FROM $full_table_name;" | tail -n 1)
+            if [ "$row_count" -le 0 ]; then
+                echo "[+] ERROR: Table $full_table_name has no data. Import may have failed." 2>&1 | tee -a ${LogFile}
+                return 1
+            else
+                echo "[+] SUCCESS: Table $full_table_name has $row_count rows." 2>&1 | tee -a ${LogFile}
+            fi
+        fi
+    done
+
+    echo "[+] NOTICE: Database integrity check completed successfully." 2>&1 | tee -a ${LogFile}
+    return 0
+}
+
+# ==============================================================================
+# Function: perform_database_maintenance
+# Description: Executes database maintenance tasks such as optimizing tables
+#              within the staging environment's MySQL database. This operation
+#              is controlled by the 'perform_database_maintenance' flag.
+#              If the flag is set to true, the function will run; otherwise,
+#              the script will skip this step.
+# ==============================================================================
+perform_database_maintenance() {
+    if [ "$perform_database_maintenance" = true ]; then
+        echo "[+] NOTICE: Starting database optimization and maintenance tasks." 2>&1 | tee -a ${LogFile}
+
+        # Optimize all tables in the database
+        mysqlcheck --defaults-extra-file=${staging_scriptPath}/.my.cnf --optimize --all-databases 2>&1 | tee -a ${LogFile}
+
+        if [ $? -eq 0 ]; then
+            echo "[+] SUCCESS: Database optimization and maintenance completed successfully." 2>&1 | tee -a ${LogFile}
+        else
+            echo "[+] ERROR: Database optimization and maintenance failed." 2>&1 | tee -a ${LogFile}
+        fi
+    else
+        echo "[+] NOTICE: Database maintenance is disabled. Skipping optimization tasks." 2>&1 | tee -a ${LogFile}
     fi
 }
 
@@ -151,19 +297,19 @@ echo "[+] NOTICE: Start script: ${start_time}" 2>&1 | tee -a ${LogFile}
 
 # 0. Check if .my.cnf Exists on the Local Server
 if [ ! -f "${staging_scriptPath}/.my.cnf" ]; then
-    echo "[+] ERROR: .my.cnf not found at ${staging_scriptPath}/.my.cnf" 2>&1 | tee -a ${LogFile}
+    echo "[+] PRE-CHECK ERROR: .my.cnf not found at ${staging_scriptPath}/.my.cnf" 2>&1 | tee -a ${LogFile}
     exit 1
 else
-    echo "[+] .my.cnf found at ${staging_scriptPath}/.my.cnf" 2>&1 | tee -a ${LogFile}
+    echo "[+] PRE-CHECK: .my.cnf found at ${staging_scriptPath}/.my.cnf" 2>&1 | tee -a ${LogFile}
 fi
 
 # 1. Check SSH Connection to Remote Server (Only if using a remote server)
 if [ "$use_remote_server" = true ]; then
-    echo "[+] Checking SSH connection to remote server: ${remote_server_ssh}" 2>&1 | tee -a ${LogFile}
+    echo "[+] PRE-CHECK: Checking SSH connection to remote server: ${remote_server_ssh}" 2>&1 | tee -a ${LogFile}
     if ssh -o BatchMode=yes -o ConnectTimeout=5 ${remote_server_ssh} 'true' 2>&1 | tee -a ${LogFile}; then
-        echo "[+] SSH connection to remote server established." 2>&1 | tee -a ${LogFile}
+        echo "[+] PRE-CHECK: SSH connection to remote server established." 2>&1 | tee -a ${LogFile}
     else
-        echo "[+] ERROR: SSH connection to remote server failed. Aborting!" 2>&1 | tee -a ${LogFile}
+        echo "[+] PRE-CHECK ERROR: SSH connection to remote server failed. Aborting!" 2>&1 | tee -a ${LogFile}
         exit 1
     fi
 fi
@@ -171,20 +317,20 @@ fi
 # 2. Check if the Website Directory Exists on Remote or Local Server
 if [ "$use_remote_server" = true ]; then
     # Remote server check
-    echo "[+] Checking if remote website directory exists: ${websitePath}" 2>&1 | tee -a ${LogFile}
+    echo "[+] PRE-CHECK: Checking if remote website directory exists: ${websitePath}" 2>&1 | tee -a ${LogFile}
     if ssh ${remote_server_ssh} "[ -d ${websitePath} ]"; then
-        echo "[+] Remote website directory exists." 2>&1 | tee -a ${LogFile}
+        echo "[+] PRE-CHECK: Remote website directory exists." 2>&1 | tee -a ${LogFile}
     else
-        echo "[+] ERROR: Remote website directory does not exist. Aborting!" 2>&1 | tee -a ${LogFile}
+        echo "[+]  PRE-CHECK ERROR: Remote website directory does not exist. Aborting!" 2>&1 | tee -a ${LogFile}
         exit 1
     fi
 else
     # Local server check
-    echo "[+] Checking if local website directory exists: ${websitePath}" 2>&1 | tee -a ${LogFile}
+    echo "[+] PRE-CHECK: Checking if local website directory exists: ${websitePath}" 2>&1 | tee -a ${LogFile}
     if [ -d ${websitePath} ]; then
-        echo "[+] Local website directory exists." 2>&1 | tee -a ${LogFile}
+        echo "[+] PRE-CHECK: Local website directory exists." 2>&1 | tee -a ${LogFile}
     else
-        echo "[+] ERROR: Local website directory does not exist. Aborting!" 2>&1 | tee -a ${LogFile}
+        echo "[+] PRE-CHECK ERROR: Local website directory does not exist. Aborting!" 2>&1 | tee -a ${LogFile}
         exit 1
     fi
 fi
@@ -194,23 +340,23 @@ is_wordpress_installation=false
 
 if [ "$use_remote_server" = true ]; then
     # Remote server check
-    echo "[+] Checking if wp-config.php exists in remote directory." 2>&1 | tee -a ${LogFile}
+    echo "[+] PRE-CHECK: Checking if wp-config.php exists in remote directory." 2>&1 | tee -a ${LogFile}
     remote_wp_config="${websitePath}/wp-config.php"
     if ssh ${remote_server_ssh} "[ -f ${remote_wp_config} ]"; then
-        echo "[+] wp-config.php found in remote directory." 2>&1 | tee -a ${LogFile}
+        echo "[+] PRE-CHECK: wp-config.php found in remote directory." 2>&1 | tee -a ${LogFile}
         is_wordpress_installation=true
     else
-        echo "[+] wp-config.php not found in remote directory, skipping WP checks." 2>&1 | tee -a ${LogFile}
+        echo "[+] PRE-CHECK: wp-config.php not found in remote directory, skipping WP checks." 2>&1 | tee -a ${LogFile}
     fi
 else
     # Local server check
-    echo "[+] Checking if wp-config.php exists in local directory." 2>&1 | tee -a ${LogFile}
+    echo "[+] PRE-CHECK: Checking if wp-config.php exists in local directory." 2>&1 | tee -a ${LogFile}
     local_wp_config="${websitePath}/wp-config.php"
     if [ -f ${local_wp_config} ]; then
-        echo "[+] wp-config.php found in local directory." 2>&1 | tee -a ${LogFile}
+        echo "[+] PRE-CHECK: wp-config.php found in local directory." 2>&1 | tee -a ${LogFile}
         is_wordpress_installation=true
     else
-        echo "[+] wp-config.php not found in local directory, skipping WP checks." 2>&1 | tee -a ${LogFile}
+        echo "[+] PRE-CHECK: wp-config.php not found in local directory, skipping WP checks." 2>&1 | tee -a ${LogFile}
     fi
 fi
 
@@ -221,7 +367,7 @@ fi
 # Check for command dependencies
 for cmd in mysql rsync; do
     if ! command -v $cmd &> /dev/null; then
-        echo "[+] ERROR: $cmd could not be found. Aborting!" 2>&1 | tee -a ${LogFile}
+        echo "[+] PRE-CHECK ERROR: $cmd could not be found. Aborting!" 2>&1 | tee -a ${LogFile}
         exit 1
     fi
 done
@@ -230,14 +376,14 @@ done
 if [ "$use_pv" = true ]; then
     if ! command -v pv &> /dev/null; then
         if [ "$install_pv_if_missing" = true ]; then
-            echo "[+] NOTICE: pv not found, installing..." 2>&1 | tee -a ${LogFile}
+            echo "[+] PRE-CHECK NOTICE: pv not found, installing..." 2>&1 | tee -a ${LogFile}
             sudo apt-get update && sudo apt-get install -y pv
             if [ $? -ne 0 ]; then
-                echo "[+] ERROR: Failed to install pv. Aborting!" 2>&1 | tee -a ${LogFile}
+                echo "[+] PRE-CHECK ERROR: Failed to install pv. Aborting!" 2>&1 | tee -a ${LogFile}
                 exit 1
             fi
         else
-            echo "[+] WARNING: pv not found, proceeding without it." 2>&1 | tee -a ${LogFile}
+            echo "[+] PRE-CHECK WARNING: pv not found, proceeding without it." 2>&1 | tee -a ${LogFile}
             use_pv=false
         fi
     fi
@@ -245,13 +391,13 @@ fi
 
 # Check for WP directory & wp-config.php
 if [ ! -d ${staging_websitePath} ]; then
-  echo "[+] ERROR: Directory ${staging_websitePath} does not exist. Aborting!" 2>&1 | tee -a ${LogFile}
+  echo "[+] PRE-CHECK ERROR: Directory ${staging_websitePath} does not exist. Aborting!" 2>&1 | tee -a ${LogFile}
   exit 1
 fi
 
 if [ ! -f ${staging_websitePath}/wp-config.php ]; then
-  echo "[+] ERROR: No wp-config.php in ${staging_websitePath}" 2>&1 | tee -a ${LogFile}
-  echo "[+] WARNING: Creating wp-config.php in ${staging_websitePath}" 2>&1 | tee -a ${LogFile}
+  echo "[+] PRE-CHECK ERROR: No wp-config.php in ${staging_websitePath}" 2>&1 | tee -a ${LogFile}
+  echo "[+]  PRE-CHECK WARNING: Creating wp-config.php in ${staging_websitePath}" 2>&1 | tee -a ${LogFile}
   # Copy the content of WP Salts page
   WPsalts=$(wget https://api.wordpress.org/secret-key/1.1/salt/ -q -O -)
   cat <<EOF > ${staging_websitePath}/wp-config.php
@@ -350,12 +496,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 /** Sets up WordPress vars and included files. */
 require_once ABSPATH . 'wp-settings.php';
 EOF
-  echo "[+] SUCCESS: Created wp-config.php in ${staging_websitePath}"
+  echo "[+] PRE-CHECK SUCCESS: Created wp-config.php in ${staging_websitePath}"
   exit
 fi 2>&1 | tee -a ${LogFile}
 
 if [ -f ${staging_websitePath}/wp-config.php ]; then
-  echo "[+] SUCCESS: Found wp-config.php in ${staging_websitePath}"
+  echo "[+] PRE-CHECK: Found wp-config.php in ${staging_websitePath}"
 fi 2>&1 | tee -a ${LogFile}
 
 echo "[+] All pre-execution checks passed. Proceeding with script execution." 2>&1 | tee -a ${LogFile}
@@ -502,35 +648,73 @@ fi
 
 # Function to import the database using different methods
 import_database() {
-    method=$1
+    # Choose the appropriate method based on the current settings and use_pv variable
+    method=$(choose_import_method "$1")
     echo "[+] NOTICE: Importing the MySQL database using method: $method" 2>&1 | tee -a ${LogFile}
 
     # Record the start time of the database import process
     start_time=$(date +%s)
 
     # Database import logic
-    if [ "$method" = "clpctl" ]; then
-        clpctl db:import --databaseName=${staging_databaseName} --file=${staging_scriptPath}/tmp/${databaseName}.sql.gz 2>&1 | tee -a ${LogFile}
-    elif [ "$method" = "unzip_clpctl" ]; then
-        gunzip -c ${staging_scriptPath}/tmp/${databaseName}.sql.gz > ${staging_scriptPath}/tmp/${databaseName}.sql
-        clpctl db:import --databaseName=${staging_databaseName} --file=${staging_scriptPath}/tmp/${databaseName}.sql 2>&1 | tee -a ${LogFile}
-    elif [ "$method" = "gunzip" ]; then
-        gunzip -c ${staging_scriptPath}/tmp/${databaseName}.sql.gz | mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf ${staging_databaseName} 2>&1 | tee -a ${LogFile}
-    elif [ "$method" = "pv_gunzip" ] && [ "$use_pv" = true ]; then
-        pv ${staging_scriptPath}/tmp/${databaseName}.sql.gz | gunzip | mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf ${staging_databaseName} 2>&1 | tee -a ${LogFile}
-    elif [ "$method" = "mysql_unzip" ]; then
-        # Unzip the file first before using the mysql command-line client
-        gunzip -c ${staging_scriptPath}/tmp/${databaseName}.sql.gz > ${staging_scriptPath}/tmp/${databaseName}.sql
-        mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf ${staging_databaseName} < ${staging_scriptPath}/tmp/${databaseName}.sql 2>&1 | tee -a ${LogFile}
-    elif [ "$method" = "mysql_gunzip" ]; then
-        gunzip -c ${staging_scriptPath}/tmp/${databaseName}.sql.gz | mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf ${staging_databaseName} 2>&1 | tee -a ${LogFile}
-    else
-        echo "[+] NOTICE: Using default import method without pv." 2>&1 | tee -a ${LogFile}
-        gunzip -c ${staging_scriptPath}/tmp/${databaseName}.sql.gz | mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf ${staging_databaseName} 2>&1 | tee -a ${LogFile}
-    fi
+    case "$method" in
+        "clpctl")
+            clpctl db:import --databaseName=${staging_databaseName} --file=${staging_scriptPath}/tmp/${databaseName}.sql.gz 2>&1 | tee -a ${LogFile}
+            ;;
+        "unzip_clpctl")
+            gunzip -c ${staging_scriptPath}/tmp/${databaseName}.sql.gz > ${staging_scriptPath}/tmp/${databaseName}.sql
+            clpctl db:import --databaseName=${staging_databaseName} --file=${staging_scriptPath}/tmp/${databaseName}.sql 2>&1 | tee -a ${LogFile}
+            ;;
+        "pv_gunzip")
+            pv ${staging_scriptPath}/tmp/${databaseName}.sql.gz | gunzip | mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf ${staging_databaseName} 2>&1 | tee -a ${LogFile}
+            ;;
+        "pv_unzip")
+            pv ${staging_scriptPath}/tmp/${databaseName}.sql.gz | gunzip > ${staging_scriptPath}/tmp/${databaseName}.sql
+            mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf ${staging_databaseName} < ${staging_scriptPath}/tmp/${databaseName}.sql 2>&1 | tee -a ${LogFile}
+            ;;
+        "pv_default")
+            pv ${staging_scriptPath}/tmp/${databaseName}.sql.gz | gunzip | mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf ${staging_databaseName} 2>&1 | tee -a ${LogFile}
+            ;;
+        "mysql_gunzip")
+            gunzip -c ${staging_scriptPath}/tmp/${databaseName}.sql.gz | mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf ${staging_databaseName} 2>&1 | tee -a ${LogFile}
+            ;;
+        "mysql_unzip")
+            gunzip -c ${staging_scriptPath}/tmp/${databaseName}.sql.gz > ${staging_scriptPath}/tmp/${databaseName}.sql
+            mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf ${staging_databaseName} < ${staging_scriptPath}/tmp/${databaseName}.sql 2>&1 | tee -a ${LogFile}
+            ;;
+        "gunzip")
+            gunzip -c ${staging_scriptPath}/tmp/${databaseName}.sql.gz | mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf ${staging_databaseName} 2>&1 | tee -a ${LogFile}
+            ;;
+        "default")
+            gunzip -c ${staging_scriptPath}/tmp/${databaseName}.sql.gz | mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf ${staging_databaseName} 2>&1 | tee -a ${LogFile}
+            ;;
+        *)
+            echo "[+] ERROR: Unknown import method: $method" 2>&1 | tee -a ${LogFile}
+            return 1
+            ;;
+    esac
 
+    # Check if the import was successful
     if [ $? -ne 0 ]; then
         echo "[+] ERROR: Failed to import the MySQL database using method: $method" 2>&1 | tee -a ${LogFile}
+        return 1
+    fi
+
+    # Verify the site URL in the database matches the expected URL
+    expected_url="https://${domainName}"
+    query=$(mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf -D ${staging_databaseName} -se "SELECT option_value FROM ${table_Prefix}options WHERE option_name = 'siteurl';")
+
+    # Check if the retrieved URL matches the expected URL
+    if [ "$query" != "$expected_url" ]; then
+        echo "[+] ERROR: Site URL mismatch. Expected: $expected_url, Found: $query" 2>&1 | tee -a ${LogFile}
+        return 1
+    else
+        echo "[+] SUCCESS: Site URL matches the expected URL ($expected_url)." 2>&1 | tee -a ${LogFile}
+    fi
+
+    # Run an integrity check on key database tables
+    check_database_integrity
+    if [ $? -ne 0 ]; then
+        echo "[+] ERROR: Database integrity check failed after using method: $method" 2>&1 | tee -a ${LogFile}
         return 1
     fi
 
@@ -545,36 +729,7 @@ import_database() {
 
     # Display the elapsed time in a human-readable format
     echo "[+] NOTICE: Database import took ${hours} hours, ${minutes} minutes, and ${seconds} seconds." 2>&1 | tee -a ${LogFile}
-
-    # Define the expected site URL based on the provided domain name
-    expected_url="https://${domainName}"
-
-    # Query the database to check the current site URL stored in the options table
-    query=$(mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf -D ${staging_databaseName} -se "SELECT option_value FROM ${table_Prefix}options WHERE option_name = 'siteurl';")
-
-    # Compare the queried site URL with the expected URL
-    if [ "$query" != "$expected_url" ]; then
-        # If the URLs do not match, log an error and return an error code
-        echo "[+] ERROR: The site URL in the database ($query) does not match the expected URL ($expected_url). The database import may have failed." 2>&1 | tee -a ${LogFile}
-
-        # Add a delay before checking the URL again to allow the database to stabilize
-        sleep 2
-
-        # Re-check the site URL after the delay
-        query=$(mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf -D ${staging_databaseName} -se "SELECT option_value FROM ${table_Prefix}options WHERE option_name = 'siteurl';")
-
-        if [ "$query" != "$expected_url" ]; then
-            echo "[+] ERROR: The site URL in the database ($query) still does not match the expected URL ($expected_url). The database import may have failed." 2>&1 | tee -a ${LogFile}
-            return 1  # Return 1 to indicate failure (assuming this is within a function)
-        else
-            echo "[+] SUCCESS: Site URL in the database matches the expected URL ($expected_url) after delay." 2>&1 | tee -a ${LogFile}
-            return 0  # Return 0 to indicate success (assuming this is within a function)
-        fi
-    else
-        # If the URLs match, log a success message and return success
-        echo "[+] SUCCESS: Site URL in the database matches the expected URL ($expected_url)." 2>&1 | tee -a ${LogFile}
-        return 0  # Return 0 to indicate success (assuming this is within a function)
-    fi
+    return 0
 }
 
 # ==============================================================================
@@ -588,7 +743,9 @@ import_database() {
 import_success=false
 
 # Loop through each import method specified in the import_methods array
-for method in "${import_methods[@]}"; do
+for original_method in "${import_methods[@]}"; do
+    method=$(choose_import_method "$original_method")
+
     # Initialize the retry count for the current method
     retry_count=0
 
@@ -598,9 +755,17 @@ for method in "${import_methods[@]}"; do
 
         # Check if the import was successful
         if [ $? -eq 0 ]; then
-            # If successful, set the import_success flag to true and break the loop
-            import_success=true
-            break  # Exit the retry loop for this method
+            # Immediately check database integrity after the import
+            check_database_integrity
+            if [ $? -ne 0 ]; then
+                echo "[+] ERROR: Database integrity check failed after using method: $method" 2>&1 | tee -a ${LogFile}
+                # If integrity check fails, continue to the next retry
+                retry_count=$((retry_count + 1))
+            else
+                # If successful, set the import_success flag to true and break the loop
+                import_success=true
+                break  # Exit the retry loop for this method
+            fi
         else
             # If the import failed, increment the retry count and log a warning
             echo "[+] WARNING: Import method $method failed. Retrying ($((retry_count + 1))/$max_retries)..." 2>&1 | tee -a ${LogFile}
@@ -614,16 +779,48 @@ for method in "${import_methods[@]}"; do
     fi
 done
 
+# Detect if the process was killed due to timeout
+if [ "$import_success" = false ]; then
+    echo "[+] ERROR: The database import process timed out. Consider increasing the timeout or optimizing the import process." 2>&1 | tee -a ${LogFile}
+    # Additional actions, like sending an alert or retrying the import, can be added here
+fi
+
 # If none of the import methods were successful after all retries, log an error and abort the script
 if [ "$import_success" = false ]; then
     echo "[+] ERROR: All import methods failed after trying each method $max_retries times. Aborting!" 2>&1 | tee -a ${LogFile}
     exit 1  # Exit the script with a failure status
 fi
 
+# Cleanup unzipped SQL files after successful import
+if [ -f "${staging_scriptPath}/tmp/${databaseName}.sql" ]; then
+    echo "[+] NOTICE: Deleting unzipped SQL file: ${staging_scriptPath}/tmp/${databaseName}.sql" 2>&1 | tee -a ${LogFile}
+    rm -f ${staging_scriptPath}/tmp/${databaseName}.sql
+fi
+
+# Cleanup split SQL files if any
+split_files_patterns=("${staging_scriptPath}/tmp/*_part_*.sql" "${staging_scriptPath}/tmp/*-part-*.sql")
+
+for pattern in "${split_files_patterns[@]}"; do
+    if ls $pattern 1> /dev/null 2>&1; then
+        echo "[+] NOTICE: Found split SQL files matching pattern '$pattern'. Deleting them from ${staging_scriptPath}/tmp/" 2>&1 | tee -a ${LogFile}
+        rm -f $pattern
+        if [ $? -eq 0 ]; then
+            echo "[+] SUCCESS: Split SQL files deleted successfully." 2>&1 | tee -a ${LogFile}
+        else
+            echo "[+] WARNING: Failed to delete some split SQL files. Please check permissions or file locks." 2>&1 | tee -a ${LogFile}
+        fi
+    else
+        echo "[+] NOTICE: No split SQL files found matching pattern '$pattern' in ${staging_scriptPath}/tmp/." 2>&1 | tee -a ${LogFile}
+    fi
+done
+
 # Remove the MySQL database export file from the staging environment
 # The file is named after the production database but resides in the staging environment's temporary directory
 echo "[+] NOTICE: Deleting the database export file: ${staging_scriptPath}/tmp/${databaseName}.sql.gz" 2>&1 | tee -a ${LogFile}
 rm ${staging_scriptPath}/tmp/${databaseName}.sql.gz
+
+# Perform database maintenance after import
+perform_database_maintenance
 
 # ==============================================================================
 # Part 12: Search and Replace URLs and Rsync Website Files

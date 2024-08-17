@@ -7,7 +7,7 @@
 # Requirements:       CloudPanel, ssh-keygen, pv (Pipe Viewer)
 # Author:             WP Speed Expert
 # Author URI:         https://wpspeedexpert.com
-# Version:            4.4.4
+# Version:            4.4.5
 # GitHub:             https://github.com/WPSpeedExpert/rsync-pull-wp/
 # To Make Executable: chmod +x rsync-pull-production-to-staging.sh
 # Crontab Schedule:   0 0 * * * /home/epicdeals/rsync-pull-production-to-staging.sh 2>&1
@@ -61,7 +61,7 @@ LogFile="${staging_scriptPath}/rsync-pull-production-to-staging.log"
 staging_databaseUserPassword=$(sed -n 's/^password\s*=\s*"\(.*\)".*/\1/p' "${staging_scriptPath}/.my.cnf")
 
 # ==============================================================================
-# Part 2: Database Import, MySQL Management, and Key Settings
+# Part 2: Database Export, Import, MySQL Management, and Key Settings
 # ==============================================================================
 
 # Set this variable to true if you want to use pv (Pipe Viewer) for showing progress during database import.
@@ -161,46 +161,33 @@ restore_user_ini() {
 # ==============================================================================
 # Function: choose_import_method
 # Description: Determines the appropriate import method based on the use_pv setting.
-#              If use_pv is true, methods utilizing pv will be selected. Otherwise,
-#              standard methods are chosen.
+#              If use_pv is true, methods utilizing pv will be selected where compatible.
+#              If an unsupported method is chosen, it will default to the standard method.
 # ==============================================================================
+
 choose_import_method() {
     local method=$1
     if [ "$use_pv" = true ]; then
-        # Use methods involving Pipe Viewer (pv) for progress display
         case "$method" in
             "mysql_gunzip")
-                echo "pv_gunzip"
+                echo "pv_gunzip"  # Use pv to show progress during gunzip and import
                 ;;
             "mysql_unzip")
-                echo "pv_unzip"
+                echo "pv_mysql_unzip"  # Use pv during unzipping and then import
                 ;;
             "gunzip")
-                echo "pv_gunzip"
+                echo "pv_gunzip"  # Use pv to show progress during gunzip and import
                 ;;
             "default")
-                echo "pv_default"
+                echo "pv_default"  # Use pv during the default import method
                 ;;
             *)
-                echo "$method"
+                echo "$method"  # Unsupported method for pv, fallback to the standard method
                 ;;
         esac
     else
         # Use standard methods without pv
-        case "$method" in
-            "pv_gunzip")
-                echo "mysql_gunzip"
-                ;;
-            "pv_unzip")
-                echo "mysql_unzip"
-                ;;
-            "pv_default")
-                echo "default"
-                ;;
-            *)
-                echo "$method"
-                ;;
-        esac
+        echo "$method"
     fi
 }
 
@@ -542,6 +529,10 @@ EOF
 echo "[+] NOTICE: Setting correct ownership and permissions for index.html" 2>&1 | tee -a ${LogFile}
 chown -Rf ${staging_siteUser}:${staging_siteUser} ${staging_websitePath}/index.html
 chmod 00755 -R ${staging_websitePath}/index.html
+
+# Immediately delete the original index.php file after setting permissions for index.html
+echo "[+] NOTICE: Deleting original index.php file." 2>&1 | tee -a ${LogFile}
+rm -f ${staging_websitePath}/index.php
 
 # Clean and remove specific directories if they exist before general cleanup
 echo "[+] NOTICE: Deleting plugins, cache, and EWWW directories" 2>&1 | tee -a ${LogFile}

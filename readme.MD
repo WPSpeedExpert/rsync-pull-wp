@@ -10,18 +10,22 @@ The Rsync Pull script is a high-performance, robust solution designed to synchro
 ## Features
 - High-Performance Syncing: Leverages rsync for efficient file synchronization between production and staging environments.
 - Advanced Logging: Comprehensive logs for each operation, enabling easy monitoring and debugging.
-- Flexible Database Handling: Multiple methods for importing databases, including clpctl, gunzip, and pv_gunzip, allowing tailored strategies based on your environment.
+- Flexible Database Handling: Multiple methods for importing databases, including clpctl, MySQL tools, and the MySQL command-line client, allowing tailored strategies based on your environment.
 - Automated Backups: Optionally backs up the staging database before any deletion, ensuring data safety.
 - Retry Mechanism: Automatically retries database imports up to three times if failures occur, increasing reliability.
 - Maintenance Mode: Automatically creates and manages a maintenance page during the sync process to prevent user access.
+- GitHub-Hosted Maintenance Page: Downloads a customizable maintenance page template from GitHub, allowing centralized management and updates.
+- Customizable Team Name: Allows dynamic customization of the team name displayed on the maintenance page through a variable, enhancing personalization.
 - Redis and MySQL Management: Includes options to flush and restart Redis and MySQL services, ensuring the staging environment is clean and optimized post-sync.
 - Customizable: Flexible configuration for MySQL restart methods, file permissions, and more.
+- Optional Database Maintenance Logging: Provides the option to log or suppress database maintenance output, giving you control over the verbosity of logs.
 
 ## Requirements
 
 - Operating System: Linux (Debian/Ubuntu) running CloudPanel
 - WordPress Installation: The script is designed for WordPress websites.
-- Dependencies:
+
+Dependencies:
 - ssh-keygen
 - pv (Pipe Viewer)
 - rsync

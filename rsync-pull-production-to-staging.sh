@@ -3,14 +3,14 @@
 # Script Name:        Rsync Production to Staging | CloudPanel to CloudPanel
 # Description:        High-performance, robust Rsync pull for large-scale websites with advanced logging,
 #                     optimized for execution from staging or production servers.
-# Compatibility:      Linux (Debian/Ubuntu) running CloudPanel
+# Compatibility:      Linux (Debian/Ubuntu) running CloudPanel & WordPress
 # Requirements:       CloudPanel, ssh-keygen, pv (Pipe Viewer)
 # Author:             WP Speed Expert
 # Author URI:         https://wpspeedexpert.com
-# Version:            4.5.2
+# Version:            4.6.1
 # GitHub:             https://github.com/WPSpeedExpert/rsync-pull-wp/
 # To Make Executable: chmod +x rsync-pull-production-to-staging.sh
-# Crontab Schedule:   0 0 * * * /home/epicdeals/rsync-pull-production-to-staging.sh 2>&1
+# Crontab Schedule:   0 0 * * * /home/${staging_domainName}/rsync-pull-production-to-staging.sh 2>&1
 # ==============================================================================
 #
 # ==============================================================================
@@ -63,6 +63,15 @@ staging_databaseUserPassword=$(sed -n 's/^password\s*=\s*"\(.*\)".*/\1/p' "${sta
 # ==============================================================================
 # Part 2: Database Export, Import, MySQL Management, and Key Settings
 # ==============================================================================
+
+# Add variables for maintenance page
+# URL of the raw maintenance page template hosted on GitHub.
+# Ensure this points directly to the HTML file's raw content.
+maintenance_template_url="https://raw.githubusercontent.com/WPSpeedExpert/rsync-pull-wp/main/maintenance-template.html"
+team_name="The Team"  # Customize this as needed
+
+# Option to pause the script after creating the maintenance page for testing purposes.
+pause_after_maintenance_creation=false  # Set to true to enable the pause
 
 # Set this variable to true if you want to use pv (Pipe Viewer) for showing progress during database import.
 # Note: pv is only compatible with the following methods: "mysql_gunzip", "mysql_unzip", "gunzip", "default".
@@ -494,37 +503,37 @@ rename_user_ini
 
 # Create a maintenance page
 echo "[+] NOTICE: Creating maintenance page as index.html" 2>&1 | tee -a ${LogFile}
-cat <<EOF > ${staging_websitePath}/index.html
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Maintenance</title>
-    <style>
-        body{font-family:Arial,sans-serif;text-align:center;padding:20px;color:#444;background-color:#f1f1f1;margin:0;}h1{font-size:36px;margin:20px 0;}article{display:block;text-align:left;max-width:1024px;margin:5% auto;padding:20px;background:#fff;border-radius:8px;box-shadow:0 0 10px rgba(0,0,0,0.1);}p{font-size:18px;line-height:1.6;}a{color:#0073aa;text-decoration:none;}a:hover{color:#005177;text-decoration:none;}@media (max-width:768px){h1{font-size:28px;}article{padding:15px;margin:10% auto;}}@media (max-width:480px){h1{font-size:24px;}p{font-size:16px;}article{padding:10px;}}
-    </style>
-</head>
-<body>
-    <article>
-        <h1>We'll be back soon!</h1>
-        <div>
-            <p>Sorry for the inconvenience but we're performing some maintenance at the moment. If you need to you can always <a href="mailto:${admin_email}">contact us</a>, otherwise we'll be back online shortly!</p>
-            <p>&mdash; The Team</p>
-        </div>
-    </article>
-</body>
-</html>
-EOF
+
+# Define the path for the maintenance page
+maintenance_page="${staging_websitePath}/index.html"
+
+# Download the maintenance page template from GitHub
+curl -sL "$maintenance_template_url" -o "$maintenance_page"
+
+# Verify the download was successful
+if [ ! -s "$maintenance_page" ]; then
+    echo "[+] ERROR: Failed to download the maintenance page template or the file is empty. Please check the URL." 2>&1 | tee -a ${LogFile}
+    exit 1
+fi
+
+# Replace the placeholder with the actual team name
+sed -i "s/{{TEAM_NAME}}/${team_name}/g" "$maintenance_page"
 
 # Set correct ownership and permissions for the maintenance page
 echo "[+] NOTICE: Setting correct ownership and permissions for index.html" 2>&1 | tee -a ${LogFile}
-chown -Rf ${staging_siteUser}:${staging_siteUser} ${staging_websitePath}/index.html
-chmod 00755 -R ${staging_websitePath}/index.html
+chown -Rf ${staging_siteUser}:${staging_siteUser} "$maintenance_page"
+chmod 00755 "$maintenance_page"
 
 # Immediately delete the original index.php file after setting permissions for index.html
 echo "[+] NOTICE: Deleting original index.php file." 2>&1 | tee -a ${LogFile}
 rm -f ${staging_websitePath}/index.php
+
+# Pause the script if the pause_after_maintenance_creation variable is set to true
+if [ "$pause_after_maintenance_creation" = true ]; then
+    echo "[+] PAUSE: The script will now pause for 60 seconds to allow testing of the maintenance page." 2>&1 | tee -a ${LogFile}
+    sleep 60
+    echo "[+] NOTICE: Resuming script execution after the pause." 2>&1 | tee -a ${LogFile}
+fi
 
 # Clean and remove specific directories if they exist before general cleanup
 echo "[+] NOTICE: Deleting plugins, cache, and EWWW directories" 2>&1 | tee -a ${LogFile}
@@ -1030,4 +1039,3 @@ fi
 end_time=$(TZ=$timezone date)
 echo "[+] NOTICE: End of script: ${end_time}" 2>&1 | tee -a ${LogFile}
 exit 0
-

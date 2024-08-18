@@ -7,7 +7,7 @@
 # Requirements:       CloudPanel, ssh-keygen, pv (Pipe Viewer)
 # Author:             WP Speed Expert
 # Author URI:         https://wpspeedexpert.com
-# Version:            4.4.5
+# Version:            4.5.2
 # GitHub:             https://github.com/WPSpeedExpert/rsync-pull-wp/
 # To Make Executable: chmod +x rsync-pull-production-to-staging.sh
 # Crontab Schedule:   0 0 * * * /home/epicdeals/rsync-pull-production-to-staging.sh 2>&1
@@ -118,6 +118,15 @@ alternate_domainName="staging.${staging_domainName}"
 # Option to enable or disable database maintenance after import
 perform_database_maintenance=true  # Set to false if you don't want to perform maintenance
 
+# Option to log or suppress database maintenance output
+log_database_maintenance=false  # Set to false to suppress logs
+
+# Define the GitHub template URL for wp-config.php
+template_url="https://raw.githubusercontent.com/WPSpeedExpert/rsync-pull-wp/main/wp-config-template.php"
+
+# Define the path where the wp-config.php will be generated
+output_path="${staging_websitePath}/wp-config.php"
+
 # ==============================================================================
 # Part 3: Functions
 # ==============================================================================
@@ -156,6 +165,78 @@ restore_user_ini() {
     else
         echo "[+] NOTICE: No .user.ini.bak file found to restore." 2>&1 | tee -a ${LogFile}
     fi
+}
+
+# ==============================================================================
+# Function: generate_wp_config
+# Description: Downloads the wp-config.php template from GitHub, replaces
+#              placeholders with actual values, writes the final output
+#              to the specified file, and sets appropriate permissions.
+# Parameters:
+#              1. GitHub raw template URL
+#              2. Output file path
+# ==============================================================================
+generate_wp_config() {
+    local template_url="$1"
+    local output_file="$2"
+
+    # Temporary files to store the downloaded template and WP salts in /tmp
+    local temp_template="/tmp/wp-config-template.php"
+    local wp_salts_file="/tmp/wp_keys.txt"
+
+    # Download the template from GitHub to /tmp
+    echo "[+] NOTICE: Downloading wp-config.php template from GitHub."
+    curl -sL "$template_url" -o "$temp_template"
+
+    if [ $? -ne 0 ]; then
+        echo "[+] ERROR: Failed to download the wp-config.php template."
+        exit 1
+    fi
+
+    # Generate WP salts and save to /tmp/wp_keys.txt
+    echo "[+] NOTICE: Generating WP salts."
+    curl -s http://api.wordpress.org/secret-key/1.1/salt/ > "$wp_salts_file"
+
+    if [ ! -s "$wp_salts_file" ]; then
+        echo "[+] ERROR: Failed to generate WP salts."
+        exit 1
+    fi
+
+    # Replace placeholders in the template with actual values and output to the desired file
+    echo "[+] NOTICE: Replacing placeholders in the wp-config.php template."
+    sed -e "s|{{DB_NAME}}|${staging_databaseName}|g" \
+        -e "s|{{DB_USER}}|${staging_databaseUserName}|g" \
+        -e "s|{{DB_PASSWORD}}|${staging_databaseUserPassword}|g" \
+        -e "s|{{DB_HOST}}|${db_host}|g" \
+        -e "s|{{TABLE_PREFIX}}|${table_Prefix}|g" \
+        -e "s|{{DOMAIN_NAME}}|${staging_domainName}|g" \
+        -e "/{{WP_SALTS}}/r $wp_salts_file" \
+        -e "s|{{WP_SALTS}}||g" \
+        "$temp_template" > "$output_file"
+
+    # Check if the file was created successfully
+    if [ -f "$output_file" ]; then
+        echo "[+] SUCCESS: wp-config.php generated successfully."
+    else
+        echo "[+] ERROR: Failed to generate wp-config.php."
+        exit 1
+    fi
+
+    # Set file ownership and permissions
+    echo "[+] NOTICE: Setting ownership and permissions for wp-config.php."
+    chown ${staging_siteUser}:${staging_siteUser} "$output_file"
+    chmod 00644 "$output_file"
+
+    if [ $? -eq 0 ]; then
+        echo "[+] SUCCESS: File permissions set for wp-config.php."
+    else
+        echo "[+] ERROR: Failed to set file permissions for wp-config.php."
+        exit 1
+    fi
+
+    # Clean up temporary files
+    rm -f "$temp_template"
+    rm -f "$wp_salts_file"
 }
 
 # ==============================================================================
@@ -250,8 +331,13 @@ perform_database_maintenance() {
     if [ "$perform_database_maintenance" = true ]; then
         echo "[+] NOTICE: Starting database optimization and maintenance tasks." 2>&1 | tee -a ${LogFile}
 
-        # Optimize all tables in the database
-        mysqlcheck --defaults-extra-file=${staging_scriptPath}/.my.cnf --optimize --all-databases 2>&1 | tee -a ${LogFile}
+        if [ "$log_database_maintenance" = true ]; then
+            # Log the output
+            mysqlcheck --defaults-extra-file=${staging_scriptPath}/.my.cnf --optimize --all-databases 2>&1 | tee -a ${LogFile}
+        else
+            # Suppress the output
+            mysqlcheck --defaults-extra-file=${staging_scriptPath}/.my.cnf --optimize --all-databases > /dev/null 2>&1
+        fi
 
         if [ $? -eq 0 ]; then
             echo "[+] SUCCESS: Database optimization and maintenance completed successfully." 2>&1 | tee -a ${LogFile}
@@ -377,112 +463,18 @@ if [ "$use_pv" = true ]; then
 fi
 
 # Check for WP directory & wp-config.php
-if [ ! -d ${staging_websitePath} ]; then
+if [ ! -d "${staging_websitePath}" ]; then
   echo "[+] PRE-CHECK ERROR: Directory ${staging_websitePath} does not exist. Aborting!" 2>&1 | tee -a ${LogFile}
   exit 1
 fi
 
-if [ ! -f ${staging_websitePath}/wp-config.php ]; then
+if [ ! -f "${staging_websitePath}/wp-config.php" ]; then
   echo "[+] PRE-CHECK ERROR: No wp-config.php in ${staging_websitePath}" 2>&1 | tee -a ${LogFile}
-  echo "[+]  PRE-CHECK WARNING: Creating wp-config.php in ${staging_websitePath}" 2>&1 | tee -a ${LogFile}
-  # Copy the content of WP Salts page
-  WPsalts=$(wget https://api.wordpress.org/secret-key/1.1/salt/ -q -O -)
-  cat <<EOF > ${staging_websitePath}/wp-config.php
-<?php
-/**
- * The base configuration for WordPress
- *
- * The wp-config.php creation script uses this file during the installation.
- * You don't have to use the web site, you can copy this file to "wp-config.php"
- * and fill in the values.
- *
- * This file contains the following configurations:
- *
- * * Database settings
- * * Secret keys
- * * Database table prefix
- * * Localized language
- * * ABSPATH
- *
- * @link https://wordpress.org/support/article/editing-wp-config-php/
- *
- * @package WordPress
- */
-// define( 'WP_AUTO_UPDATE_CORE', false );
+  echo "[+] PRE-CHECK WARNING: Creating wp-config.php in ${staging_websitePath}" 2>&1 | tee -a ${LogFile}
 
-// ** Database settings - You can get this info from your web host ** //
-/** The name of the database for WordPress */
-define( 'DB_NAME', "${staging_databaseName}" );
+  # Call the function to generate the wp-config.php using the pre-defined variables from Part 2
+  generate_wp_config "$template_url" "$output_path"
 
-/** Database username */
-define( 'DB_USER', "${staging_databaseUserName}" );
-
-/** Database password */
-define( 'DB_PASSWORD', "${staging_databaseUserPassword}" );
-
-/** Database hostname */
-define( 'DB_HOST', "localhost" );
-
-/** Database charset to use in creating database tables. */
-define( 'DB_CHARSET', 'utf8' );
-
-/** The database collate type. Don't change this if in doubt. */
-define( 'DB_COLLATE', '' );
-
-/**
- * Authentication unique keys and salts.
- *
- * Change these to different unique phrases! You can generate these using
- * the {@link https://api.wordpress.org/secret-key/1.1/salt/ WordPress.org secret-key service}.
- *
- * You can change these at any point in time to invalidate all existing cookies.
- * This will force all users to have to log in again.
- *
- * @since 2.6.0
- */
-${WPsalts}
-define('WP_CACHE_KEY_SALT','${staging_domainName}');
-
-/**
- * WordPress database table prefix.
- *
- * You can have multiple installations in one database if you give each
- * a unique prefix. Only numbers, letters, and underscores please!
- */
-\$table_prefix  = '${table_Prefix}';
-
-/**
- * For developers: WordPress debugging mode.
- *
- * Change this to true to enable the display of notices during development.
- * It is strongly recommended that plugin and theme developers use WP_DEBUG
- * in their development environments.
- *
- * For information on other constants that can be used for debugging,
- * visit the documentation.
- *
- * @link https://wordpress.org/support/article/debugging-in-wordpress/
- */
-define( 'WP_DEBUG', false );
-
-/* Add any custom values between this line and the "stop editing" line. */
-define( 'FS_METHOD', 'direct' );
-define( 'WP_DEBUG_DISPLAY', false );
-define( 'WP_DEBUG_LOG', true );
-define( 'CONCATENATE_SCRIPTS', false );
-define( 'AUTOSAVE_INTERVAL', 600 );
-define( 'WP_POST_REVISIONS', 5 );
-define( 'EMPTY_TRASH_DAYS', 21 );
-/* That's all, stop editing! Happy publishing. */
-
-/** Absolute path to the WordPress directory. */
-if ( ! defined( 'ABSPATH' ) ) {
-	define( 'ABSPATH', dirname(__FILE__) . '/' );
-}
-
-/** Sets up WordPress vars and included files. */
-require_once ABSPATH . 'wp-settings.php';
-EOF
   echo "[+] PRE-CHECK SUCCESS: Created wp-config.php in ${staging_websitePath}"
   exit
 fi 2>&1 | tee -a ${LogFile}
@@ -694,19 +686,16 @@ import_database() {
     expected_url="https://${domainName}"
     query=$(mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf -D ${staging_databaseName} -se "SELECT option_value FROM ${table_Prefix}options WHERE option_name = 'siteurl';")
 
+    # Strip trailing slashes for comparison
+    expected_url=$(echo "$expected_url" | sed 's:/*$::')
+    query=$(echo "$query" | sed 's:/*$::')
+
     # Check if the retrieved URL matches the expected URL
     if [ "$query" != "$expected_url" ]; then
         echo "[+] ERROR: Site URL mismatch. Expected: $expected_url, Found: $query" 2>&1 | tee -a ${LogFile}
         return 1
     else
         echo "[+] SUCCESS: Site URL matches the expected URL ($expected_url)." 2>&1 | tee -a ${LogFile}
-    fi
-
-    # Run an integrity check on key database tables
-    check_database_integrity
-    if [ $? -ne 0 ]; then
-        echo "[+] ERROR: Database integrity check failed after using method: $method" 2>&1 | tee -a ${LogFile}
-        return 1
     fi
 
     # Record the end time and calculate the elapsed time
@@ -746,17 +735,8 @@ for original_method in "${import_methods[@]}"; do
 
         # Check if the import was successful
         if [ $? -eq 0 ]; then
-            # Immediately check database integrity after the import
-            check_database_integrity
-            if [ $? -ne 0 ]; then
-                echo "[+] ERROR: Database integrity check failed after using method: $method" 2>&1 | tee -a ${LogFile}
-                # If integrity check fails, continue to the next retry
-                retry_count=$((retry_count + 1))
-            else
-                # If successful, set the import_success flag to true and break the loop
-                import_success=true
-                break  # Exit the retry loop for this method
-            fi
+            import_success=true
+            break  # Exit the retry loop for this method
         else
             # If the import failed, increment the retry count and log a warning
             echo "[+] WARNING: Import method $method failed. Retrying ($((retry_count + 1))/$max_retries)..." 2>&1 | tee -a ${LogFile}
@@ -770,16 +750,17 @@ for original_method in "${import_methods[@]}"; do
     fi
 done
 
-# Detect if the process was killed due to timeout
-if [ "$import_success" = false ]; then
-    echo "[+] ERROR: The database import process timed out. Consider increasing the timeout or optimizing the import process." 2>&1 | tee -a ${LogFile}
-    # Additional actions, like sending an alert or retrying the import, can be added here
-fi
-
-# If none of the import methods were successful after all retries, log an error and abort the script
+# If the import was not successful after all retries, log an error and abort the script
 if [ "$import_success" = false ]; then
     echo "[+] ERROR: All import methods failed after trying each method $max_retries times. Aborting!" 2>&1 | tee -a ${LogFile}
     exit 1  # Exit the script with a failure status
+fi
+
+# Run an integrity check on key database tables only once after successful import
+check_database_integrity
+if [ $? -ne 0 ]; then
+    echo "[+] ERROR: Database integrity check failed after successful import." 2>&1 | tee -a ${LogFile}
+    exit 1
 fi
 
 # Cleanup unzipped SQL files after successful import
@@ -789,7 +770,11 @@ if [ -f "${staging_scriptPath}/tmp/${databaseName}.sql" ]; then
 fi
 
 # Cleanup split SQL files if any
-split_files_patterns=("${staging_scriptPath}/tmp/*_part_*.sql" "${staging_scriptPath}/tmp/*-part-*.sql")
+split_files_patterns=(
+    "${staging_scriptPath}/tmp/*_part_*"
+    "${staging_scriptPath}/tmp/*-part-*"
+    "${staging_scriptPath}/tmp/*-part-*"
+)
 
 for pattern in "${split_files_patterns[@]}"; do
     if ls $pattern 1> /dev/null 2>&1; then
@@ -806,7 +791,6 @@ for pattern in "${split_files_patterns[@]}"; do
 done
 
 # Remove the MySQL database export file from the staging environment
-# The file is named after the production database but resides in the staging environment's temporary directory
 echo "[+] NOTICE: Deleting the database export file: ${staging_scriptPath}/tmp/${databaseName}.sql.gz" 2>&1 | tee -a ${LogFile}
 rm ${staging_scriptPath}/tmp/${databaseName}.sql.gz
 
@@ -847,15 +831,20 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Verify if the site URL is correctly set in the staging database after search and replace
-expected_url="https://${final_domainName}"
+# Verify the site URL in the database matches the expected URL
+expected_url="https://${domainName}"
 query=$(mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf -D ${staging_databaseName} -se "SELECT option_value FROM ${table_Prefix}options WHERE option_name = 'siteurl';")
 
+# Strip trailing slashes for comparison
+expected_url=$(echo "$expected_url" | sed 's:/*$::')
+query=$(echo "$query" | sed 's:/*$::')
+
+# Check if the retrieved URL matches the expected URL
 if [ "$query" != "$expected_url" ]; then
-    echo "[+] ERROR: The site URL in the database ($query) does not match the expected URL ($expected_url). The search and replace may have failed." 2>&1 | tee -a ${LogFile}
-    exit 1
+    echo "[+] ERROR: Site URL mismatch. Expected: $expected_url, Found: $query" 2>&1 | tee -a ${LogFile}
+    return 1
 else
-    echo "[+] SUCCESS: Site URL in the database matches the expected URL ($expected_url)." 2>&1 | tee -a ${LogFile}
+    echo "[+] SUCCESS: Site URL matches the expected URL ($expected_url)." 2>&1 | tee -a ${LogFile}
 fi
 
 # Disable: Discourage search engines from indexing this website in the staging environment
@@ -1041,3 +1030,4 @@ fi
 end_time=$(TZ=$timezone date)
 echo "[+] NOTICE: End of script: ${end_time}" 2>&1 | tee -a ${LogFile}
 exit 0
+

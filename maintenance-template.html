@@ -1,1 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Maintenance</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            padding: 20px;
+            color: #444;
+            background-color: #f1f1f1;
+            margin: 0;
+        }
 
+        h1 {
+            font-size: 36px;
+            margin: 20px 0;
+        }
+
+        article {
+            display: block;
+            text-align: left;
+            max-width: 1024px;
+            margin: 5% auto;
+            padding: 20px;
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+
+        p {
+            font-size: 18px;
+            line-height: 1.6;
+        }
+
+        a {
+            color: #0073aa;
+            text-decoration: none;
+        }
+
+        a:hover {
+            color: #005177;
+            text-decoration: none;
+        }
+
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 28px;
+            }
+            
+            article {
+                padding: 15px;
+                margin: 10% auto;
+            }
+        }
+
+        @media (max-width: 480px) {
+            h1 {
+                font-size: 24px;
+            }
+            
+            p {
+                font-size: 16px;
+            }
+            
+            article {
+                padding: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <article>
+        <h1>We'll be back soon!</h1>
+        <div>
+            <p>Sorry for the inconvenience but we're performing some maintenance at the moment. If you need to you can always <a href="mailto:{{ADMIN_EMAIL}}">contact us</a>, otherwise we'll be back online shortly!</p>
+            <p>&mdash; {{TEAM_NAME}}</p>
+        </div>
+    </article>
+</body>
+</html>

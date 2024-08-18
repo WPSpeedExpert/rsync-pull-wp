@@ -7,7 +7,7 @@
 # Requirements:       CloudPanel, ssh-keygen, pv (Pipe Viewer)
 # Author:             WP Speed Expert
 # Author URI:         https://wpspeedexpert.com
-# Version:            4.6.1
+# Version:            4.6.2
 # GitHub:             https://github.com/WPSpeedExpert/rsync-pull-wp/
 # To Make Executable: chmod +x rsync-pull-production-to-staging.sh
 # Crontab Schedule:   0 0 * * * /home/${staging_domainName}/rsync-pull-production-to-staging.sh 2>&1
@@ -26,7 +26,7 @@ staging_domainName=("staging.domainName.com")
 staging_siteUser=("staging_siteUser")
 
 # Remote server settings
-use_remote_server=true
+use_remote_server="true"
 remote_server_ssh="root@0.0.0.0"
 
 # Admin email for contact and alerts
@@ -37,21 +37,21 @@ admin_email="someone@example.com"
 timezone="Europe/Amsterdam"
 
 # Log the date and time with the correct timezone
-start_time=$(TZ=$timezone date)
+start_time=$(TZ="$timezone" date)
 
 # Set the table prefix for WordPress database tables.
 # Default is 'wp_' but may vary if customized.
 table_Prefix=("wp_")
 
 # Source | Production
-databaseName=${siteUser} # change if different from siteUser
-databaseUserName=${siteUser} # change if different from siteUser
+databaseName="${siteUser}" # change if different from siteUser
+databaseUserName="${siteUser}" # change if different from siteUser
 websitePath="/home/${siteUser}/htdocs/${domainName}"
 scriptPath="/home/${siteUser}"
 
 # Destination | Staging
-staging_databaseName=${staging_siteUser} # change if different from siteUser
-staging_databaseUserName=${staging_siteUser} # change if different from siteUser
+staging_databaseName="${staging_siteUser}" # change if different from siteUser
+staging_databaseUserName="${staging_siteUser}" # change if different from siteUser
 staging_websitePath="/home/${staging_siteUser}/htdocs/${staging_domainName}"
 staging_scriptPath="/home/${staging_siteUser}"
 
@@ -66,17 +66,16 @@ staging_databaseUserPassword=$(sed -n 's/^password\s*=\s*"\(.*\)".*/\1/p' "${sta
 
 # Add variables for maintenance page
 # URL of the raw maintenance page template hosted on GitHub.
-# Ensure this points directly to the HTML file's raw content.
 maintenance_template_url="https://raw.githubusercontent.com/WPSpeedExpert/rsync-pull-wp/main/maintenance-template.html"
 team_name="The Team"  # Customize this as needed
 
 # Option to pause the script after creating the maintenance page for testing purposes.
-pause_after_maintenance_creation=false  # Set to true to enable the pause
+pause_after_maintenance_creation="false"  # Set to true to enable the pause
 
 # Set this variable to true if you want to use pv (Pipe Viewer) for showing progress during database import.
 # Note: pv is only compatible with the following methods: "mysql_gunzip", "mysql_unzip", "gunzip", "default".
 # Set it to false if you are running the script via cron or do not require progress display.
-use_pv=false
+use_pv="false"
 
 # Database import method control:
 # Choose the method for importing the database. The available options are:
@@ -97,38 +96,38 @@ import_methods=("clpctl" "unzip_clpctl" "mysql_gunzip" "mysql_unzip" "gunzip" "d
 mysql_restart_method="stop_start"
 
 # Install PV if not installed (set to true or false).
-install_pv_if_missing=true
+install_pv_if_missing="true"
 
 # Backup Options for Destination Database (Staging Environment):
 # Controls whether the destination website's database (in Cloudpanel and MySQL) should be backed up before any deletion occurs.
 # Set to true to create a backup of the staging (destination) database before proceeding with deletion.
-backup_staging_database=true
+backup_staging_database="true"
 
 # Database Recreation Options for Destination Website:
 # Determines how the destination website's database (in Cloudpanel and MySQL) is handled during the sync process.
 # Set to true to delete the entire staging (destination) database and recreate it from scratch.
 # Set to false if you prefer to drop all tables in the staging database instead of deleting the entire database.
-recreate_database=true
+recreate_database="true"
 
 # Set to true to enable automated retry on import failure (maximum retries: 2)
-enable_automatic_retry=true
-max_retries=1
+enable_automatic_retry="true"
+max_retries="1"
 
 # Set to false if you do not want to keep the wp-content/uploads folder during cleanup
 # Typically set to true for very large websites with a large media library.
-keep_uploads_folder=false
+keep_uploads_folder="false"
 
 # Set to true if you want to use an alternate domain name for the search and replace query
-use_alternate_domain=false
+use_alternate_domain="false"
 
 # Alternate domain name (only used if use_alternate_domain is true)
 alternate_domainName="staging.${staging_domainName}"
 
 # Option to enable or disable database maintenance after import
-perform_database_maintenance=true  # Set to false if you don't want to perform maintenance
+perform_database_maintenance="true"  # Set to false if you don't want to perform maintenance
 
 # Option to log or suppress database maintenance output
-log_database_maintenance=false  # Set to false to suppress logs
+log_database_maintenance="false"  # Set to false to suppress logs
 
 # Define the GitHub template URL for wp-config.php
 template_url="https://raw.githubusercontent.com/WPSpeedExpert/rsync-pull-wp/main/wp-config-template.php"

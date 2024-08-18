@@ -7,7 +7,7 @@
 # Requirements:       CloudPanel, ssh-keygen, pv (Pipe Viewer)
 # Author:             WP Speed Expert
 # Author URI:         https://wpspeedexpert.com
-# Version:            4.6.2
+# Version:            4.6.3
 # GitHub:             https://github.com/WPSpeedExpert/rsync-pull-wp/
 # To Make Executable: chmod +x rsync-pull-production-to-staging.sh
 # Crontab Schedule:   0 0 * * * /home/${staging_domainName}/rsync-pull-production-to-staging.sh 2>&1
@@ -501,7 +501,7 @@ echo "[+] All pre-execution checks passed. Proceeding with script execution." 2>
 rename_user_ini
 
 # Create a maintenance page
-echo "[+] NOTICE: Creating maintenance page as index.html" 2>&1 | tee -a ${LogFile}
+echo "[+] NOTICE: Creating maintenance page as index.html" 2>&1 | tee -a "${LogFile}"
 
 # Define the path for the maintenance page
 maintenance_page="${staging_websitePath}/index.html"
@@ -511,27 +511,37 @@ curl -sL "$maintenance_template_url" -o "$maintenance_page"
 
 # Verify the download was successful
 if [ ! -s "$maintenance_page" ]; then
-    echo "[+] ERROR: Failed to download the maintenance page template or the file is empty. Please check the URL." 2>&1 | tee -a ${LogFile}
+    echo "[+] ERROR: Failed to download the maintenance page template or the file is empty. Please check the URL." 2>&1 | tee -a "${LogFile}"
     exit 1
+else
+    echo "[+] SUCCESS: Maintenance page template downloaded successfully." 2>&1 | tee -a "${LogFile}"
 fi
 
 # Replace the placeholder with the actual team name
 sed -i "s/{{TEAM_NAME}}/${team_name}/g" "$maintenance_page"
 
+# Verify that the placeholder was replaced correctly
+if grep -q "{{TEAM_NAME}}" "$maintenance_page"; then
+    echo "[+] ERROR: Placeholder replacement failed. Please check the template file and the script." 2>&1 | tee -a "${LogFile}"
+    exit 1
+else
+    echo "[+] SUCCESS: Placeholder replacement completed." 2>&1 | tee -a "${LogFile}"
+fi
+
 # Set correct ownership and permissions for the maintenance page
-echo "[+] NOTICE: Setting correct ownership and permissions for index.html" 2>&1 | tee -a ${LogFile}
-chown -Rf ${staging_siteUser}:${staging_siteUser} "$maintenance_page"
+echo "[+] NOTICE: Setting correct ownership and permissions for index.html" 2>&1 | tee -a "${LogFile}"
+chown -Rf "${staging_siteUser}:${staging_siteUser}" "$maintenance_page"
 chmod 00755 "$maintenance_page"
 
 # Immediately delete the original index.php file after setting permissions for index.html
-echo "[+] NOTICE: Deleting original index.php file." 2>&1 | tee -a ${LogFile}
-rm -f ${staging_websitePath}/index.php
+echo "[+] NOTICE: Deleting original index.php file." 2>&1 | tee -a "${LogFile}"
+rm -f "${staging_websitePath}/index.php"
 
 # Pause the script if the pause_after_maintenance_creation variable is set to true
 if [ "$pause_after_maintenance_creation" = true ]; then
-    echo "[+] PAUSE: The script will now pause for 60 seconds to allow testing of the maintenance page." 2>&1 | tee -a ${LogFile}
+    echo "[+] PAUSE: The script will now pause for 60 seconds to allow testing of the maintenance page." 2>&1 | tee -a "${LogFile}"
     sleep 60
-    echo "[+] NOTICE: Resuming script execution after the pause." 2>&1 | tee -a ${LogFile}
+    echo "[+] NOTICE: Resuming script execution after the pause." 2>&1 | tee -a "${LogFile}"
 fi
 
 # Clean and remove specific directories if they exist before general cleanup

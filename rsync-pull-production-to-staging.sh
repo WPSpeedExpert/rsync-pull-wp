@@ -128,7 +128,7 @@ maintenance_template_url="https://raw.githubusercontent.com/WPSpeedExpert/rsync-
 # Option to pause the script after creating the maintenance page for testing purposes.
 pause_after_maintenance_creation="false"  # Set to true to enable the pause
 
-# Define the GitHub template URL for wp-config.php
+# URL of the raw wp-config.php template hosted on GitHub.
 template_url="https://raw.githubusercontent.com/WPSpeedExpert/rsync-pull-wp/main/wp-config-template.php"
 
 # Define the path where the wp-config.php will be generated

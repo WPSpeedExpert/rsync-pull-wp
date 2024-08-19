@@ -7,7 +7,7 @@
 # Requirements:       CloudPanel, ssh-keygen, pv (Pipe Viewer)
 # Author:             WP Speed Expert
 # Author URI:         https://wpspeedexpert.com
-# Version:            5.6.3
+# Version:            5.6.6
 # GitHub:             https://github.com/WPSpeedExpert/rsync-pull-wp/
 # To Make Executable: chmod +x rsync-pull-production-to-staging.sh
 # Crontab Schedule:   0 0 * * * /home/${staging_domainName}/rsync-pull-production-to-staging.sh 2>&1
@@ -520,8 +520,11 @@ fi
 # Replace the placeholder with the actual team name
 sed -i "s/{{TEAM_NAME}}/${team_name}/g" "$maintenance_page"
 
-# Verify that the placeholder was replaced correctly
-if grep -q "{{TEAM_NAME}}" "$maintenance_page"; then
+# Replace the placeholder with the actual admin email
+sed -i "s/{{ADMIN_EMAIL}}/${admin_email}/g" "$maintenance_page"
+
+# Verify that the placeholders were replaced correctly
+if grep -q "{{TEAM_NAME}}" "$maintenance_page" || grep -q "{{ADMIN_EMAIL}}" "$maintenance_page"; then
     echo "[+] ERROR: Placeholder replacement failed. Please check the template file and the script." 2>&1 | tee -a "${LogFile}"
     exit 1
 else
@@ -704,9 +707,9 @@ import_database() {
     expected_url="https://${domainName}"
     query=$(mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf -D ${staging_databaseName} -se "SELECT option_value FROM ${table_Prefix}options WHERE option_name = 'siteurl';")
 
-    # Strip trailing slashes for comparison
-    expected_url=$(echo "$expected_url" | sed 's:/*$::')
-    query=$(echo "$query" | sed 's:/*$::')
+    # Strip trailing slashes and whitespace for comparison
+    expected_url=$(echo "$expected_url" | sed 's:/*$::' | xargs)
+    query=$(echo "$query" | sed 's:/*$::' | xargs)
 
     # Check if the retrieved URL matches the expected URL
     if [ "$query" != "$expected_url" ]; then
@@ -832,6 +835,11 @@ fi
 # Perform search and replace in the staging database
 # This replaces all instances of the production domain with the staging domain (or alternate domain)
 echo "[+] NOTICE: Performing search and replace of URLs in the staging database: ${staging_databaseName}." 2>&1 | tee -a ${LogFile}
+
+# Strip trailing slashes and whitespace for comparison
+domainName=$(echo "${domainName}" | sed 's:/*$::' | xargs)
+final_domainName=$(echo "${final_domainName}" | sed 's:/*$::' | xargs)
+
 mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf -D ${staging_databaseName} -e "
 UPDATE ${table_Prefix}options SET option_value = REPLACE(option_value, 'https://${domainName}', 'https://${final_domainName}') WHERE option_name = 'home' OR option_name = 'siteurl';
 UPDATE ${table_Prefix}posts SET post_content = REPLACE(post_content, 'https://${domainName}', 'https://${final_domainName}');
@@ -850,12 +858,12 @@ if [ $? -ne 0 ]; then
 fi
 
 # Verify the site URL in the database matches the expected URL
-expected_url="https://${domainName}"
+expected_url="https://${final_domainName}"
 query=$(mysql --defaults-extra-file=${staging_scriptPath}/.my.cnf -D ${staging_databaseName} -se "SELECT option_value FROM ${table_Prefix}options WHERE option_name = 'siteurl';")
 
-# Strip trailing slashes for comparison
-expected_url=$(echo "$expected_url" | sed 's:/*$::')
-query=$(echo "$query" | sed 's:/*$::')
+# Strip trailing slashes and whitespace for comparison
+expected_url=$(echo "$expected_url" | sed 's:/*$::' | xargs)
+query=$(echo "$query" | sed 's:/*$::' | xargs)
 
 # Check if the retrieved URL matches the expected URL
 if [ "$query" != "$expected_url" ]; then
@@ -883,12 +891,12 @@ start_time=$(date +%s)
 # Rsync files from the production environment to the staging environment
 if [ "$use_remote_server" = true ]; then
     rsync -azP --update --delete --no-perms --no-owner --no-group --no-times \
-          --exclude '/index.php' --exclude 'wp-content/cache/*' --exclude 'wp-content/backups-dup-pro/*' \
+          --exclude '/index.php' --exclude '/index.html' --exclude 'wp-content/cache/*' --exclude 'wp-content/backups-dup-pro/*' \
           --exclude 'wp-config.php' --exclude '.user.ini.bak' --exclude '.user.ini' \
           ${remote_server_ssh}:${websitePath}/ ${staging_websitePath}/
 else
     rsync -azP --update --delete --no-perms --no-owner --no-group --no-times \
-          --exclude '/index.php' --exclude 'wp-content/cache/*' --exclude 'wp-content/backups-dup-pro/*' \
+          --exclude '/index.php' --exclude '/index.html' --exclude 'wp-content/cache/*' --exclude 'wp-content/backups-dup-pro/*' \
           --exclude 'wp-config.php' --exclude '.user.ini.bak' --exclude '.user.ini' \
           ${websitePath}/ ${staging_websitePath}/
 fi

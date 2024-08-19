@@ -7,7 +7,7 @@
 # Requirements:       CloudPanel, ssh-keygen, pv (Pipe Viewer)
 # Author:             WP Speed Expert
 # Author URI:         https://wpspeedexpert.com
-# Version:            5.6.6
+# Version:            5.6.7
 # GitHub:             https://github.com/WPSpeedExpert/rsync-pull-wp/
 # To Make Executable: chmod +x rsync-pull-production-to-staging.sh
 # Crontab Schedule:   0 0 * * * /home/${staging_domainName}/rsync-pull-production-to-staging.sh 2>&1
@@ -29,8 +29,9 @@ staging_siteUser=("staging_siteUser")
 use_remote_server="true"
 remote_server_ssh="root@0.0.0.0"
 
-# Admin email for contact and alerts
-admin_email="someone@example.com"
+# Add variables for maintenance page
+admin_email="someone@example.com" # Admin email for contact and alerts
+team_name="The Team"  # Customize this as needed
 
 # Define the timezone variable (Default: Europe/Amsterdam)
 # To find your correct time zone, you can use the 'timedatectl' command on a Linux system or visit the IANA time zone database at https://www.iana.org/time-zones.
@@ -64,19 +65,6 @@ staging_databaseUserPassword=$(sed -n 's/^password\s*=\s*"\(.*\)".*/\1/p' "${sta
 # Part 2: Database Export, Import, MySQL Management, and Key Settings
 # ==============================================================================
 
-# Add variables for maintenance page
-# URL of the raw maintenance page template hosted on GitHub.
-maintenance_template_url="https://raw.githubusercontent.com/WPSpeedExpert/rsync-pull-wp/main/maintenance-template.html"
-team_name="The Team"  # Customize this as needed
-
-# Option to pause the script after creating the maintenance page for testing purposes.
-pause_after_maintenance_creation="false"  # Set to true to enable the pause
-
-# Set this variable to true if you want to use pv (Pipe Viewer) for showing progress during database import.
-# Note: pv is only compatible with the following methods: "mysql_gunzip", "mysql_unzip", "gunzip", "default".
-# Set it to false if you are running the script via cron or do not require progress display.
-use_pv="false"
-
 # Database import method control:
 # Choose the method for importing the database. The available options are:
 # - "clpctl": Use CloudPanel's clpctl tool to directly import the compressed SQL file.
@@ -87,6 +75,14 @@ use_pv="false"
 # - "default": Standard method that unzips the SQL file and imports it using MySQL commands.
 import_methods=("clpctl" "unzip_clpctl" "mysql_gunzip" "mysql_unzip" "gunzip" "default")
 
+# Set this variable to true if you want to use pv (Pipe Viewer) for showing progress during database import.
+# Note: pv is only compatible with the following methods: "mysql_gunzip", "mysql_unzip", "gunzip", "default".
+# Set it to false if you are running the script via cron or do not require progress display.
+use_pv="false"
+
+# Install PV if not installed (set to true or false).
+install_pv_if_missing="true"
+
 # MySQL and Server Restart Options:
 # This variable determines how MySQL is managed and whether the server should be rebooted during the script's execution.
 # - "restart": Restarts the MySQL service to ensure changes take effect.
@@ -94,9 +90,6 @@ import_methods=("clpctl" "unzip_clpctl" "mysql_gunzip" "mysql_unzip" "gunzip" "d
 # - "reboot": Performs a graceful shutdown and reboots the entire server, ensuring all services restart.
 # - "none": No action is taken regarding MySQL or the server, preserving the current state.
 mysql_restart_method="stop_start"
-
-# Install PV if not installed (set to true or false).
-install_pv_if_missing="true"
 
 # Backup Options for Destination Database (Staging Environment):
 # Controls whether the destination website's database (in Cloudpanel and MySQL) should be backed up before any deletion occurs.
@@ -128,6 +121,12 @@ perform_database_maintenance="true"  # Set to false if you don't want to perform
 
 # Option to log or suppress database maintenance output
 log_database_maintenance="false"  # Set to false to suppress logs
+
+# URL of the raw maintenance page template hosted on GitHub.
+maintenance_template_url="https://raw.githubusercontent.com/WPSpeedExpert/rsync-pull-wp/main/maintenance-template.html"
+
+# Option to pause the script after creating the maintenance page for testing purposes.
+pause_after_maintenance_creation="false"  # Set to true to enable the pause
 
 # Define the GitHub template URL for wp-config.php
 template_url="https://raw.githubusercontent.com/WPSpeedExpert/rsync-pull-wp/main/wp-config-template.php"
